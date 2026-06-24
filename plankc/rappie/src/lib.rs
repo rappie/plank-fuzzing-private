@@ -79,11 +79,6 @@ pub fn render_expr(expr: &Expr) -> String {
     }
 }
 
-pub fn generate_expr(seed: u64, max_depth: u8) -> Expr {
-    let mut rng = SeededRng::new(seed);
-    generate_expr_with_rng(&mut rng, max_depth)
-}
-
 pub fn render_program(expr: &Expr) -> String {
     format!(
         r#"
@@ -99,30 +94,6 @@ init {{
 "#,
         render_expr(expr)
     )
-}
-
-#[derive(Debug, Clone)]
-pub struct SeededRng {
-    state: u64,
-}
-
-impl SeededRng {
-    pub fn new(seed: u64) -> Self {
-        Self { state: seed }
-    }
-
-    pub fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut value = self.state;
-        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        value ^ (value >> 31)
-    }
-
-    pub fn below(&mut self, upper: u64) -> u64 {
-        assert!(upper > 0, "upper bound must be non-zero");
-        self.next_u64() % upper
-    }
 }
 
 pub fn compile_plank_source(source: &str, backend: BackendKind) -> Result<Vec<u8>, String> {
@@ -179,22 +150,6 @@ pub fn backends_match(source: &str, calldata: &[u8]) -> Result<(), String> {
     same_result("sir-debug", &sir_debug_result, "sir-release", &sir_release_result)
 }
 
-#[track_caller]
-pub fn assert_backends_match(source: &str, calldata: &[u8]) {
-    backends_match(source, calldata)
-        .unwrap_or_else(|err| panic!("backend comparison failed:\n{err}\n\nsource:\n{source}"));
-}
-
-#[track_caller]
-pub fn assert_same_result(
-    left_name: &str,
-    left: &EvmRunResult,
-    right_name: &str,
-    right: &EvmRunResult,
-) {
-    same_result(left_name, left, right_name, right).unwrap_or_else(|err| panic!("{err}"));
-}
-
 fn render_diagnostics<F: plank_source::SourceFs>(driver: &Driver<'_, F>) -> String {
     if driver.session.diagnostics().is_empty() {
         return "compilation failed without diagnostics".to_string();
@@ -207,40 +162,6 @@ fn render_diagnostics<F: plank_source::SourceFs>(driver: &Driver<'_, F>) -> Stri
         .map(|diagnostic| diagnostic.render_plain(&driver.session))
         .collect::<Vec<_>>()
         .join("\n----\n")
-}
-
-fn generate_expr_with_rng(rng: &mut SeededRng, max_depth: u8) -> Expr {
-    if max_depth == 0 {
-        return generate_leaf(rng);
-    }
-
-    match rng.below(9) {
-        0..=2 => generate_leaf(rng),
-        3 => binary_expr(rng, max_depth, Expr::Add),
-        4 => binary_expr(rng, max_depth, Expr::Sub),
-        5 => binary_expr(rng, max_depth, Expr::Mul),
-        6 => binary_expr(rng, max_depth, Expr::Xor),
-        7 => binary_expr(rng, max_depth, Expr::And),
-        8 => binary_expr(rng, max_depth, Expr::Or),
-        _ => unreachable!("rng.below(9) returns 0..=8"),
-    }
-}
-
-fn generate_leaf(rng: &mut SeededRng) -> Expr {
-    match rng.below(3) {
-        0 => Expr::Const(rng.next_u64() & 0xffff),
-        1 => Expr::CalldataWord0,
-        2 => Expr::CalldataWord1,
-        _ => unreachable!("rng.below(3) returns 0..=2"),
-    }
-}
-
-fn binary_expr(rng: &mut SeededRng, max_depth: u8, make: fn(Box<Expr>, Box<Expr>) -> Expr) -> Expr {
-    let next_depth = max_depth - 1;
-    make(
-        Box::new(generate_expr_with_rng(rng, next_depth)),
-        Box::new(generate_expr_with_rng(rng, next_depth)),
-    )
 }
 
 fn arbitrary_expr(u: &mut Unstructured<'_>, depth: u8) -> arbitrary::Result<Expr> {

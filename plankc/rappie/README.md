@@ -1,18 +1,16 @@
 # Rappie Fuzzing Experiments
 
-This crate is a small, isolated starting point for Plank differential fuzzing.
-It does not fuzz yet. The first goal is to prove the core loop:
+This crate is a small, isolated Plank differential fuzzing harness. The current
+target compares bytecode emitted by the `sir-debug` and `sir-release` backends:
 
 1. compile the same Plank source with two backends
 2. execute both bytecode outputs in the same EVM
 3. compare observable behavior
 
-The current comparison is `sir-debug` versus `sir-release`.
-
 ## Layout
 
 - `src/lib.rs`: reusable harness helpers for compiling Plank source, running EVM bytecode, and comparing results.
-- `tests/plank_backend_smoke.rs`: fixed and generated-expression backend-diff smoke tests.
+- `fuzz/fuzz_targets/plank_backend_expr_diff.rs`: libFuzzer target for generated expression programs.
 
 The crate is included in the `plankc` workspace so it can call compiler crates directly.
 
@@ -53,32 +51,12 @@ init {
 }
 ```
 
-This is still deterministic source generation, not fuzzing. The point is to establish
-the model-to-Plank rendering boundary before adding `arbitrary` or `cargo-fuzz`.
-
-## Seeded Generation
-
-`generate_expr(seed, max_depth)` builds a bounded expression tree from a tiny
-deterministic RNG. The RNG is implemented locally so the crate does not need another
-dependency yet.
-
-Generation is intentionally simple:
-
-- depth `0` can only produce leaves: constants, `a`, or `b`
-- higher depths can produce leaves or binary operations
-- constants are small `u64` values masked to 16 bits
-
-The generated tests run 100 seeds at depth 4 with several fixed calldata pairs. A
-failure should include the seed, max depth, calldata label, rendered expression model,
-and generated Plank source. That makes a case reproducible as an ordinary Rust test
-before it becomes a fuzz corpus entry.
-
-This is not coverage-guided fuzzing. It is a deterministic bridge between the
-hand-built expression cases and future `arbitrary`/`cargo-fuzz` support.
+This keeps generation structure-aware: every decoded fuzz input renders to syntactically
+valid Plank for this small program shape.
 
 ## Arbitrary Decoding
 
-`FuzzCase` is the structured input shape that future fuzz targets will decode:
+`FuzzCase` is the structured input shape decoded by the fuzz target:
 
 ```rust
 pub struct FuzzCase {
@@ -97,10 +75,6 @@ The pipeline is:
 ```text
 bytes -> FuzzCase -> Expr -> Plank source -> backend diff
 ```
-
-This does not replace `render_program` or the seeded generator. It is another input
-source for the same program model. The current test feeds fixed byte slices through
-`FuzzCase::arbitrary`; `cargo-fuzz` can later feed mutated bytes through the same path.
 
 ## Compile Path
 
@@ -126,7 +100,7 @@ BackendKind::SirRelease
 
 The EVM version is fixed to `EvmVersion::Osaka`, matching the current CLI default.
 
-## EVM Runner
+## Execution Oracle
 
 `run_bytecode(bytecode, calldata)` executes already-compiled bytecode with `revm`.
 It inserts the bytecode at a fixed target address in an in-memory `CacheDB<EmptyDB>`,
@@ -145,40 +119,10 @@ This intentionally ignores gas, storage, logs, and account state for now. The fi
 oracle only checks whether both backends agree on success/revert status and output
 bytes.
 
-## Smoke Test
-
-The fixed smoke test compiles this Plank program:
-
-```plk
-init {
-    let a = @evm_calldataload(0);
-    let b = @evm_calldataload(32);
-    let result = a +% b;
-
-    let out = @malloc_uninit(32);
-    @mstore32(out, result);
-    @evm_return(out, 32);
-}
-```
-
-It provides calldata containing two 32-byte words, `7` and `3`, then compares the
-`sir-debug` and `sir-release` execution results.
-
-The generated-expression smoke test renders a small set of hand-built `Expr` values
-into equivalent program templates and runs each generated program through the same
-backend comparison.
-
-The seeded-expression smoke test renders many bounded expressions from fixed seeds
-and checks them against `small`, `zero`, and `wrap` calldata cases.
-
-The arbitrary-decoding smoke test turns fixed byte slices into `FuzzCase` values,
-renders each decoded case, and runs the same backend comparison. Cases that do not
-decode are skipped.
-
 ## Cargo Fuzz
 
-The first coverage-guided target is `plank_backend_expr_diff`. It feeds libFuzzer bytes
-through the same `FuzzCase` decoder used by the normal tests:
+The coverage-guided target is `plank_backend_expr_diff`. It feeds libFuzzer bytes
+through the `FuzzCase` decoder:
 
 ```text
 libFuzzer bytes -> FuzzCase -> Plank source -> sir-debug/sir-release backend diff
@@ -233,6 +177,6 @@ the Sonatina backend dependency.
 
 Good small follow-ups:
 
-- add one or two more fixed Plank smoke programs
-- expand the deterministic expression set with more safe `u256` operations
 - add a small seed corpus or replay/debug runner for saved fuzz inputs
+- expand the expression model with more safe `u256` operations
+- compare additional backends once the current oracle is stable
