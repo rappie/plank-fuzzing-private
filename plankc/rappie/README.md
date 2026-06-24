@@ -1,13 +1,13 @@
 # Rappie Fuzzing Experiments
 
 This crate is an isolated Plank differential fuzzing harness. The current target
-compares bytecode emitted by the `sir-debug` and `sir-release` backends:
+compares bytecode emitted by the default backend set:
 
 1. decode libFuzzer bytes into a typed Plank program
 2. render that program to `.plk` source
-3. compile the same source with both backends
-4. execute both bytecode outputs in the same EVM
-5. compare observable status and return bytes
+3. compile the same source with each backend
+4. execute each bytecode output in the same EVM
+5. compare observable status and return bytes against the reference backend
 
 ## Layout
 
@@ -73,8 +73,9 @@ Calldata is encoded as one 32-byte big-endian EVM word per generated input.
 
 ## Compile And Oracle Path
 
-`compile_plank_source(source, backend)` compiles a virtual `main.plk` file in memory
-with `plank_source::source_fs::InMemoryFs`; no temporary source file is written.
+`compile_plank_source(source, backend, optimizations)` compiles a virtual `main.plk`
+file in memory with `plank_source::source_fs::InMemoryFs`; no temporary source file is
+written.
 
 The high-level pipeline is:
 
@@ -82,7 +83,19 @@ The high-level pipeline is:
 Plank source -> HIR -> MIR -> bytecode -> revm execution
 ```
 
-The default oracle compares `BackendKind::SirDebug` against `BackendKind::SirRelease`.
+The default oracle compares:
+
+```text
+sir-debug
+sir-release
+sona-o0
+```
+
+`sir-debug` is the reference backend. `sir-release` shares the SIR lowering path, while
+`sona-o0` exercises the Sonatina lowering and codegen path. Additional Sona specs
+(`sona-o1`, `sona-os`, and `sona-o2`) are available for future optimization-level
+targets.
+
 `run_bytecode(bytecode, calldata)` installs bytecode at a fixed in-memory account and
 executes a call transaction with the generated calldata.
 

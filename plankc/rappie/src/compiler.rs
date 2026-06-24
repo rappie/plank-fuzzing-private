@@ -31,6 +31,7 @@ impl std::error::Error for CompileError {}
 pub(crate) fn compile_plank_source(
     source: &str,
     backend: BackendKind,
+    optimizations: Option<&str>,
 ) -> Result<Vec<u8>, CompileError> {
     let mut fs = InMemoryFs::new();
     fs.add_file(MAIN_PATH, source.to_string());
@@ -47,7 +48,7 @@ pub(crate) fn compile_plank_source(
     }
 
     driver
-        .emit_bytecode_with_backend(&mir, None, false, false, false, backend)
+        .emit_bytecode_with_backend(&mir, optimizations, false, false, false, backend)
         .map_err(CompileError::new)
 }
 

@@ -80,6 +80,6 @@ mod tests {
         );
         let source = render_program(&program);
 
-        compile_plank_source(&source, BackendKind::SirDebug).expect("source should compile");
+        compile_plank_source(&source, BackendKind::SirDebug, None).expect("source should compile");
     }
 }
