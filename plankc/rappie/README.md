@@ -175,6 +175,43 @@ The arbitrary-decoding smoke test turns fixed byte slices into `FuzzCase` values
 renders each decoded case, and runs the same backend comparison. Cases that do not
 decode are skipped.
 
+## Cargo Fuzz
+
+The first coverage-guided target is `plank_backend_expr_diff`. It feeds libFuzzer bytes
+through the same `FuzzCase` decoder used by the normal tests:
+
+```text
+libFuzzer bytes -> FuzzCase -> Plank source -> sir-debug/sir-release backend diff
+```
+
+Install the runner once:
+
+```bash
+cargo install cargo-fuzz
+```
+
+Build the target from `plankc/rappie/`:
+
+```bash
+cargo +nightly fuzz build plank_backend_expr_diff
+```
+
+Run it:
+
+```bash
+cargo +nightly fuzz run plank_backend_expr_diff
+```
+
+Replay a saved crash:
+
+```bash
+cargo +nightly fuzz run plank_backend_expr_diff fuzz/artifacts/plank_backend_expr_diff/<crash-file>
+```
+
+On a backend mismatch, the panic output includes the decoded `FuzzCase`, generated
+Plank source, and backend diff error. Generated corpus, artifact, coverage, and fuzz
+target build directories are ignored under `fuzz/`.
+
 ## Running
 
 From `plankc/`:
@@ -198,4 +235,4 @@ Good small follow-ups:
 
 - add one or two more fixed Plank smoke programs
 - expand the deterministic expression set with more safe `u256` operations
-- add `cargo-fuzz` only after the compile/run/compare loop is boring
+- add a small seed corpus or replay/debug runner for saved fuzz inputs

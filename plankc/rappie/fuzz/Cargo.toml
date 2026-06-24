@@ -1,0 +1,22 @@
+[package]
+name = "rappie-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rappie = { path = ".." }
+
+[[bin]]
+name = "plank_backend_expr_diff"
+path = "fuzz_targets/plank_backend_expr_diff.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
