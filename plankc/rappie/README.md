@@ -22,49 +22,67 @@ The crate is included in the `plankc` workspace so it can call compiler crates d
 ## Program Generator
 
 The generator builds a small semantic Plank subset instead of raw syntax nodes. It
-currently emits `init { ... }` programs that read 1 to 4 calldata words, create a flat
-sequence of typed locals, and return one `u256` word.
+currently emits helper functions plus `init { ... }` programs that read 1 to 4 calldata
+words, create typed locals, and return one `u256` word.
 
-The internal model is SSA-like:
+The internal model is typed and scope-aware:
 
 ```rust
 Program {
     input_words: u8,
+    functions: Vec<Function>,
     stmts: Vec<Stmt>,
     result: U256Value,
 }
 ```
 
-Statements are typed `let` bindings for `u256` and `bool`. Expressions may reference
-only calldata inputs or previously generated locals of the correct type. This keeps
-generation valid while still giving libFuzzer room to shrink individual statements.
+Statements cover typed `let` bindings, mutable assignments, and `if` statements.
+Expressions may reference only visible calldata inputs, parameters, helper functions, or
+locals of the correct type. Nested expression blocks and `if` branches have their own
+local scopes, so block-local refs cannot leak into parent scopes.
 
-The first operation set uses deterministic no-stdlib EVM builtins:
+The operation set uses deterministic no-stdlib EVM builtins:
 
 - `@evm_not`
-- `@evm_add`, `@evm_sub`, `@evm_mul`
-- `@evm_and`, `@evm_or`, `@evm_xor`
-- `@evm_eq`, `@evm_lt`, `@evm_gt`, `@evm_iszero`
-- `if` expressions that select between two `u256` values
+- `@evm_add`, `@evm_sub`, `@evm_mul`, `@evm_div`, `@evm_mod`
+- `@evm_addmod`, `@evm_mulmod`
+- `@evm_and`, `@evm_or`, `@evm_xor`, `@evm_shl`, `@evm_shr`, `@evm_sar`
+- `@evm_byte`
+- `@evm_eq`, `@evm_lt`, `@evm_gt`, `@evm_slt`, `@evm_sgt`, `@evm_iszero`
 
-Storage, logs, calls, loops, `run`, structs, tuples, imports, and comptime features are
-intentionally deferred until the oracle can check the extra behavior they expose.
+The generator also emits full-width 256-bit constants, helper function calls, branch-local
+work in `if` expressions, and mutable local updates. Storage, logs, external EVM calls,
+loops, `run`, structs, tuples, imports, and comptime features are intentionally deferred
+until the oracle can check the extra behavior they expose.
 
 ## Rendered Source Shape
 
 Generated source is deterministic and readable. A typical program looks like:
 
 ```plk
+const f0 = fn(x0: u256, x1: bool) u256 {
+    if x1 {
+        let v0 = @evm_addmod(x0, x0, x0);
+        v0
+    } else {
+        x0
+    }
+};
+
 init {
     let in0 = @evm_calldataload(0);
     let in1 = @evm_calldataload(32);
 
-    let v0 = @evm_add(in0, in1);
+    let mut v0 = @evm_add(in0, in1);
     let b0 = @evm_lt(v0, in0);
-    let v1 = if b0 { v0 } else { in1 };
+    v0 = {
+        let v1 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff;
+        v1
+    };
+    let v2 = f0(v0, b0);
 
     let out = @malloc_uninit(32);
-    @mstore32(out, v1);
+    @mstore32(out, v2);
     @evm_return(out, 32);
 }
 ```
