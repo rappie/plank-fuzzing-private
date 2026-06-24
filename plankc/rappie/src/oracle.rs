@@ -19,6 +19,12 @@ pub const SIR_DEBUG: BackendSpec =
 pub const SIR_RELEASE: BackendSpec =
     BackendSpec { name: "sir-release", kind: BackendKind::SirRelease, optimizations: None };
 
+pub const SIR_RELEASE_CSUD: BackendSpec = BackendSpec {
+    name: "sir-release-csud",
+    kind: BackendKind::SirRelease,
+    optimizations: Some("csud"),
+};
+
 pub const SONA_O0: BackendSpec =
     BackendSpec { name: "sona-o0", kind: BackendKind::Sona, optimizations: Some("O0") };
 
@@ -31,7 +37,7 @@ pub const SONA_OS: BackendSpec =
 pub const SONA_O2: BackendSpec =
     BackendSpec { name: "sona-o2", kind: BackendKind::Sona, optimizations: Some("O2") };
 
-pub const DEFAULT_BACKEND_SET: [BackendSpec; 3] = [SIR_DEBUG, SIR_RELEASE, SONA_O0];
+pub const DEFAULT_BACKEND_SET: [BackendSpec; 2] = [SIR_DEBUG, SIR_RELEASE_CSUD];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendExecution {
@@ -161,8 +167,8 @@ fn compare_results(
 #[cfg(test)]
 mod tests {
     use super::{
-        BackendSpec, DEFAULT_BACKEND_SET, HarnessError, SIR_DEBUG, SIR_RELEASE, SONA_O0, SONA_O1,
-        SONA_O2, SONA_OS, compare_backend_set,
+        BackendKind, BackendSpec, DEFAULT_BACKEND_SET, HarnessError, SIR_DEBUG, SIR_RELEASE,
+        SIR_RELEASE_CSUD, SONA_O0, SONA_O1, SONA_O2, SONA_OS, compare_backend_set,
     };
     use crate::compiler::compile_plank_source;
 
@@ -193,8 +199,15 @@ init {
     }
 
     #[test]
-    fn default_backend_set_compares_sir_debug_sir_release_and_sona_o0() {
-        assert_eq!(DEFAULT_BACKEND_SET, [SIR_DEBUG, SIR_RELEASE, SONA_O0]);
+    fn sir_release_csud_spec_uses_release_backend_with_csud_passes() {
+        assert_eq!(SIR_RELEASE_CSUD.name, "sir-release-csud");
+        assert_eq!(SIR_RELEASE_CSUD.kind, BackendKind::SirRelease);
+        assert_eq!(SIR_RELEASE_CSUD.optimizations, Some("csud"));
+    }
+
+    #[test]
+    fn default_backend_set_compares_sir_debug_and_optimized_sir_release() {
+        assert_eq!(DEFAULT_BACKEND_SET, [SIR_DEBUG, SIR_RELEASE_CSUD]);
     }
 
     #[test]
@@ -229,9 +242,10 @@ init {
 
     #[test]
     fn backend_spec_remains_copyable_for_inline_sets() {
-        let backends: [BackendSpec; 2] = [SIR_DEBUG, SONA_O0];
+        let backends: [BackendSpec; 3] = [SIR_DEBUG, SIR_RELEASE, SONA_O0];
 
         assert_eq!(backends[0].name, "sir-debug");
-        assert_eq!(backends[1].name, "sona-o0");
+        assert_eq!(backends[1].name, "sir-release");
+        assert_eq!(backends[2].name, "sona-o0");
     }
 }

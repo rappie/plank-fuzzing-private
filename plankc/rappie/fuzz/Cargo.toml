@@ -18,5 +18,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "plank_backend_program_diff_sona"
+path = "fuzz_targets/plank_backend_program_diff_sona.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = ["."]

@@ -101,18 +101,21 @@ The high-level pipeline is:
 Plank source -> HIR -> MIR -> bytecode -> revm execution
 ```
 
-The default oracle compares:
+The default hot oracle compares:
 
 ```text
 sir-debug
-sir-release
-sona-o0
+sir-release-csud
 ```
 
-`sir-debug` is the reference backend. `sir-release` shares the SIR lowering path, while
-`sona-o0` exercises the Sonatina lowering and codegen path. Additional Sona specs
-(`sona-o1`, `sona-os`, and `sona-o2`) are available for future optimization-level
-targets.
+`sir-debug` is the reference backend. `sir-release-csud` shares the SIR lowering path,
+runs the `c`, `s`, `u`, and `d` SIR optimization passes, then exercises release backend
+codegen. This maximizes bug yield in the default fuzz loop by combining SIR optimization
+bugs, release backend bugs, and interaction bugs.
+
+Sona is kept as a separate slower campaign because it exercises the independent
+Sonatina lowering and codegen path. Additional Sona specs (`sona-o1`, `sona-os`, and
+`sona-o2`) are available for future optimization-level targets.
 
 `run_bytecode(bytecode, calldata)` installs bytecode at a fixed in-memory account and
 executes a call transaction with the generated calldata.
@@ -148,6 +151,13 @@ Run it:
 cargo +nightly fuzz run plank_backend_program_diff
 ```
 
+Build and run the slower Sona campaign:
+
+```bash
+cargo +nightly fuzz build plank_backend_program_diff_sona
+cargo +nightly fuzz run plank_backend_program_diff_sona
+```
+
 Replay a saved crash:
 
 ```bash
@@ -156,6 +166,13 @@ cargo +nightly fuzz run plank_backend_program_diff fuzz/artifacts/plank_backend_
 
 On a backend mismatch, the panic output includes the decoded `FuzzCase`, generated
 Plank source, and backend diff error.
+
+Useful follow-up comparisons for crash triage:
+
+- `sir-debug` vs `sir-debug -O csud`: isolate SIR optimization bugs.
+- `sir-debug -O csud` vs `sir-release -O csud`: isolate release backend bugs.
+- `sir-debug` vs `sir-release`: isolate unoptimized release backend bugs.
+- `sir-debug` vs `sona-o0`: slower independent MIR-to-bytecode cross-check.
 
 ## Running Tests
 
