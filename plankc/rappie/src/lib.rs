@@ -23,6 +23,44 @@ pub struct EvmRunResult {
     pub output: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Expr {
+    Const(u64),
+    CalldataWord0,
+    CalldataWord1,
+    Add(Box<Expr>, Box<Expr>),
+    Xor(Box<Expr>, Box<Expr>),
+    And(Box<Expr>, Box<Expr>),
+}
+
+pub fn render_expr(expr: &Expr) -> String {
+    match expr {
+        Expr::Const(value) => value.to_string(),
+        Expr::CalldataWord0 => "a".to_string(),
+        Expr::CalldataWord1 => "b".to_string(),
+        Expr::Add(left, right) => format!("({} +% {})", render_expr(left), render_expr(right)),
+        Expr::Xor(left, right) => format!("({} ^ {})", render_expr(left), render_expr(right)),
+        Expr::And(left, right) => format!("({} & {})", render_expr(left), render_expr(right)),
+    }
+}
+
+pub fn render_program(expr: &Expr) -> String {
+    format!(
+        r#"
+init {{
+    let a = @evm_calldataload(0);
+    let b = @evm_calldataload(32);
+    let result = {};
+
+    let out = @malloc_uninit(32);
+    @mstore32(out, result);
+    @evm_return(out, 32);
+}}
+"#,
+        render_expr(expr)
+    )
+}
+
 pub fn compile_plank_source(source: &str, backend: BackendKind) -> Result<Vec<u8>, String> {
     let mut fs = InMemoryFs::new();
     fs.add_file(MAIN_PATH, source.to_string());
@@ -66,6 +104,17 @@ pub fn run_bytecode(bytecode: &[u8], calldata: &[u8]) -> EvmRunResult {
 }
 
 #[track_caller]
+pub fn assert_backends_match(source: &str, calldata: &[u8]) {
+    let sir_debug = compile_or_panic(source, BackendKind::SirDebug);
+    let sir_release = compile_or_panic(source, BackendKind::SirRelease);
+
+    let sir_debug_result = run_bytecode(&sir_debug, calldata);
+    let sir_release_result = run_bytecode(&sir_release, calldata);
+
+    assert_same_result("sir-debug", &sir_debug_result, "sir-release", &sir_release_result);
+}
+
+#[track_caller]
 pub fn assert_same_result(
     left_name: &str,
     left: &EvmRunResult,
@@ -84,6 +133,13 @@ pub fn assert_same_result(
         hex::encode(&left.output),
         hex::encode(&right.output)
     );
+}
+
+#[track_caller]
+fn compile_or_panic(source: &str, backend: BackendKind) -> Vec<u8> {
+    compile_plank_source(source, backend).unwrap_or_else(|err| {
+        panic!("compilation failed for {backend:?}:\n{err}\n\nsource:\n{source}")
+    })
 }
 
 fn render_diagnostics<F: plank_source::SourceFs>(driver: &Driver<'_, F>) -> String {

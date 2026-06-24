@@ -12,9 +12,46 @@ The current comparison is `sir-debug` versus `sir-release`.
 ## Layout
 
 - `src/lib.rs`: reusable harness helpers for compiling Plank source, running EVM bytecode, and comparing results.
-- `tests/plank_backend_smoke.rs`: one fixed Plank program used as a backend-diff smoke test.
+- `tests/plank_backend_smoke.rs`: fixed and generated-expression backend-diff smoke tests.
 
 The crate is included in the `plankc` workspace so it can call compiler crates directly.
+
+## Expression Model
+
+The first generated-source layer is a tiny expression tree:
+
+```rust
+pub enum Expr {
+    Const(u64),
+    CalldataWord0,
+    CalldataWord1,
+    Add(Box<Expr>, Box<Expr>),
+    Xor(Box<Expr>, Box<Expr>),
+    And(Box<Expr>, Box<Expr>),
+}
+```
+
+`render_expr` turns this model into Plank syntax. All binary expressions are
+parenthesized, and the only generated variables are `a` and `b`, which are defined by
+the fixed program template. `Add` renders as `+%` because Plank requires explicit
+wrapping arithmetic for `u256`.
+
+`render_program` inserts the rendered expression into this init-only template:
+
+```plk
+init {
+    let a = @evm_calldataload(0);
+    let b = @evm_calldataload(32);
+    let result = <rendered expr>;
+
+    let out = @malloc_uninit(32);
+    @mstore32(out, result);
+    @evm_return(out, 32);
+}
+```
+
+This is still deterministic source generation, not fuzzing. The point is to establish
+the model-to-Plank rendering boundary before adding `arbitrary` or `cargo-fuzz`.
 
 ## Compile Path
 
@@ -61,7 +98,7 @@ bytes.
 
 ## Smoke Test
 
-The current test compiles this Plank program:
+The fixed smoke test compiles this Plank program:
 
 ```plk
 init {
@@ -78,8 +115,9 @@ init {
 It provides calldata containing two 32-byte words, `7` and `3`, then compares the
 `sir-debug` and `sir-release` execution results.
 
-The `+%` operator is used because Plank requires explicit wrapping arithmetic for
-`u256` values.
+The generated-expression smoke test renders a small set of hand-built `Expr` values
+into equivalent program templates and runs each generated program through the same
+backend comparison.
 
 ## Running
 
@@ -103,7 +141,6 @@ the Sonatina backend dependency.
 Good small follow-ups:
 
 - add one or two more fixed Plank smoke programs
-- extract a tiny expression model
-- render generated expressions into the fixed Plank template
-- run deterministic generated cases before adding `cargo-fuzz`
+- expand the deterministic expression set with more safe `u256` operations
+- add bounded deterministic random generation
 - add `cargo-fuzz` only after the compile/run/compare loop is boring
