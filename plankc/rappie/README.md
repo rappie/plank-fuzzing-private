@@ -9,33 +9,34 @@ target compares bytecode emitted by the `sir-debug` and `sir-release` backends:
 
 ## Layout
 
-- `src/lib.rs`: reusable harness helpers for compiling Plank source, running EVM bytecode, and comparing results.
+- `src/lib.rs`: thin public API for fuzz cases and backend comparison.
+- `src/case.rs`: `FuzzCase`, `arbitrary` decoding, and calldata construction.
+- `src/expr.rs` and `src/program.rs`: generated expression AST and Plank rendering.
+- `src/compiler.rs`, `src/evm.rs`, and `src/oracle.rs`: compile, execute, and compare pipeline.
 - `fuzz/fuzz_targets/plank_backend_expr_diff.rs`: libFuzzer target for generated expression programs.
 
 The crate is included in the `plankc` workspace so it can call compiler crates directly.
 
 ## Expression Model
 
-The first generated-source layer is a tiny expression tree:
+The generated-source layer is a tiny expression tree:
 
 ```rust
-pub enum Expr {
+enum Expr {
     Const(u64),
     CalldataWord0,
     CalldataWord1,
-    Add(Box<Expr>, Box<Expr>),
-    Sub(Box<Expr>, Box<Expr>),
-    Mul(Box<Expr>, Box<Expr>),
-    Xor(Box<Expr>, Box<Expr>),
-    And(Box<Expr>, Box<Expr>),
-    Or(Box<Expr>, Box<Expr>),
+    Binary {
+        op: BinaryOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 }
 ```
 
-`render_expr` turns this model into Plank syntax. All binary expressions are
-parenthesized, and the only generated variables are `a` and `b`, which are defined by
-the fixed program template. Arithmetic renders as `+%`, `-%`, and `*%` because Plank
-requires explicit wrapping arithmetic for `u256`.
+`BinaryOp` covers wrapping arithmetic (`+%`, `-%`, `*%`) and bitwise operators (`^`,
+`&`, `|`). Rendering parenthesizes every binary expression, and the only generated
+variables are `a` and `b`, which are defined by the fixed program template.
 
 `render_program` inserts the rendered expression into this init-only template:
 
@@ -60,15 +61,13 @@ valid Plank for this small program shape.
 
 ```rust
 pub struct FuzzCase {
-    pub expr: Expr,
-    pub calldata_a: u64,
-    pub calldata_b: u64,
+    // private fields
 }
 ```
 
-It implements `arbitrary::Arbitrary` manually. The expression decoder uses bounded
-recursion with a maximum depth of 4, emits only valid `Expr` nodes, and keeps constants
-small by decoding `u16` values.
+It implements `arbitrary::Arbitrary` manually and exposes `source()` and `calldata()`
+for the fuzz target. The expression decoder uses bounded recursion with a maximum depth
+of 4, emits only valid `Expr` nodes, and keeps constants small by decoding `u16` values.
 
 The pipeline is:
 
@@ -91,7 +90,7 @@ Plank source
   -> emit bytecode with selected backend
 ```
 
-The selected backend is passed as `plank_driver::BackendKind`. The smoke test uses:
+The selected backend is passed as `plank_driver::BackendKind`. The default oracle uses:
 
 ```text
 BackendKind::SirDebug
@@ -117,7 +116,8 @@ pub struct EvmRunResult {
 
 This intentionally ignores gas, storage, logs, and account state for now. The first
 oracle only checks whether both backends agree on success/revert status and output
-bytes.
+bytes. Public comparison APIs return `HarnessError`, which distinguishes compilation
+failures, execution failures, and backend mismatches.
 
 ## Cargo Fuzz
 
