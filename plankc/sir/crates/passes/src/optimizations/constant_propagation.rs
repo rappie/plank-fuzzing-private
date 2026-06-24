@@ -282,10 +282,11 @@ impl SCCP {
         to: BasicBlockId,
         reachable: &mut DenseIndexSet<BasicBlockId>,
     ) {
+        self.flow_outputs_to(program, from, to);
+
         if !reachable.contains(to) {
             reachable.add(to);
             self.cfg_worklist.push(to);
-            self.flow_outputs_to(program, from, to);
         }
     }
 
@@ -1425,6 +1426,36 @@ mod tests {
         let reachability = store.reachability(&ir);
         assert!(!reachability.contains(BasicBlockId::new(6)), "yes (@6) should be unreachable");
         assert!(reachability.contains(BasicBlockId::new(7)), "no (@7) should be reachable");
+    }
+
+    #[test]
+    fn test_late_reachable_predecessor_flows_outputs_to_reachable_merge() {
+        let input = r#"
+            fn init:
+                entry {
+                    zero = const 0
+                    word = calldataload zero
+                    cond = iszero word
+                    two = const 2
+                    => cond ? @set_zero : @keep_two
+                }
+                keep_two -> two {
+                    => @merge
+                }
+                set_zero -> zero_value {
+                    zero_value = const 0
+                    => @merge
+                }
+                merge value {
+                    result = div value value
+                    stop
+                }
+        "#;
+
+        let (_, sccp) = run_const_prop(input);
+
+        assert_eq!(sccp.lattice[LocalId::new(5)], LatticeValue::Overdefined);
+        assert_eq!(sccp.lattice[LocalId::new(6)], LatticeValue::Overdefined);
     }
 
     #[test]
