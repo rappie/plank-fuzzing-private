@@ -1,78 +1,85 @@
-use crate::{
-    expr::{BinaryOp, Expr},
-    program::render_program,
-};
-use alloy_primitives::U256;
+use crate::generator::{GeneratedCase, encode_calldata_words, render_program};
 use arbitrary::{Arbitrary, Unstructured};
-
-const MAX_ARBITRARY_EXPR_DEPTH: u8 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuzzCase {
-    expr: Expr,
-    calldata_a: u64,
-    calldata_b: u64,
+    generated: GeneratedCase,
 }
 
 impl FuzzCase {
     pub fn source(&self) -> String {
-        render_program(&self.expr)
+        render_program(self.generated.program())
     }
 
     pub fn calldata(&self) -> Vec<u8> {
-        calldata_words([self.calldata_a, self.calldata_b])
+        encode_calldata_words(self.generated.calldata_words())
     }
 }
 
 impl<'a> Arbitrary<'a> for FuzzCase {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
-        Ok(Self {
-            expr: arbitrary_expr(u, MAX_ARBITRARY_EXPR_DEPTH)?,
-            calldata_a: u64::arbitrary(u)?,
-            calldata_b: u64::arbitrary(u)?,
-        })
+        Ok(Self { generated: GeneratedCase::arbitrary(u)? })
     }
 }
 
-fn arbitrary_expr(u: &mut Unstructured<'_>, depth: u8) -> arbitrary::Result<Expr> {
-    if depth == 0 {
-        return arbitrary_leaf(u);
+#[cfg(test)]
+mod tests {
+    use super::FuzzCase;
+    use crate::{
+        compiler::compile_plank_source,
+        generator::{
+            BoolExpr, BoolRef, BoolValue, CompareOp, Program, Stmt, U256BinaryOp, U256Expr,
+            U256Ref, U256Value, render_program,
+        },
+        oracle::BackendKind,
+    };
+    use arbitrary::{Arbitrary, Unstructured};
+
+    #[test]
+    fn fuzz_case_exposes_source_and_matching_calldata() {
+        let bytes = vec![11; 4096];
+        let mut u = Unstructured::new(&bytes);
+        let case = FuzzCase::arbitrary(&mut u).expect("case should decode");
+
+        assert!(case.source().starts_with("init {"));
+        assert!(case.source().contains("@evm_return(out, 32);"));
+        assert_eq!(case.calldata().len() % 32, 0);
     }
 
-    match u.int_in_range(0..=8)? {
-        0..=2 => arbitrary_leaf(u),
-        3 => arbitrary_binary_expr(u, depth, BinaryOp::Add),
-        4 => arbitrary_binary_expr(u, depth, BinaryOp::Sub),
-        5 => arbitrary_binary_expr(u, depth, BinaryOp::Mul),
-        6 => arbitrary_binary_expr(u, depth, BinaryOp::Xor),
-        7 => arbitrary_binary_expr(u, depth, BinaryOp::And),
-        8 => arbitrary_binary_expr(u, depth, BinaryOp::Or),
-        _ => unreachable!("int_in_range(0..=8) returns 0..=8"),
-    }
-}
+    #[test]
+    fn hand_constructed_generated_program_compiles() {
+        let program = Program::new(
+            2,
+            vec![
+                Stmt::LetU256 {
+                    id: U256Ref::new(0),
+                    expr: U256Expr::Binary {
+                        op: U256BinaryOp::Add,
+                        left: U256Value::Input(0),
+                        right: U256Value::Input(1),
+                    },
+                },
+                Stmt::LetBool {
+                    id: BoolRef::new(0),
+                    expr: BoolExpr::Compare {
+                        op: CompareOp::Lt,
+                        left: U256Value::Local(U256Ref::new(0)),
+                        right: U256Value::Input(0),
+                    },
+                },
+                Stmt::LetU256 {
+                    id: U256Ref::new(1),
+                    expr: U256Expr::If {
+                        cond: BoolValue::Local(BoolRef::new(0)),
+                        then_value: U256Value::Local(U256Ref::new(0)),
+                        else_value: U256Value::Input(1),
+                    },
+                },
+            ],
+            U256Value::Local(U256Ref::new(1)),
+        );
+        let source = render_program(&program);
 
-fn arbitrary_leaf(u: &mut Unstructured<'_>) -> arbitrary::Result<Expr> {
-    match u.int_in_range(0..=2)? {
-        0 => Ok(Expr::Const(u64::from(u16::arbitrary(u)?))),
-        1 => Ok(Expr::CalldataWord0),
-        2 => Ok(Expr::CalldataWord1),
-        _ => unreachable!("int_in_range(0..=2) returns 0..=2"),
+        compile_plank_source(&source, BackendKind::SirDebug).expect("source should compile");
     }
-}
-
-fn arbitrary_binary_expr(
-    u: &mut Unstructured<'_>,
-    depth: u8,
-    op: BinaryOp,
-) -> arbitrary::Result<Expr> {
-    let next_depth = depth - 1;
-    Ok(Expr::binary(op, arbitrary_expr(u, next_depth)?, arbitrary_expr(u, next_depth)?))
-}
-
-fn calldata_words(words: impl IntoIterator<Item = u64>) -> Vec<u8> {
-    let mut calldata = Vec::new();
-    for word in words {
-        calldata.extend_from_slice(&U256::from(word).to_be_bytes::<32>());
-    }
-    calldata
 }

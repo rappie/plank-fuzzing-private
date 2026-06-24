@@ -1,111 +1,92 @@
 # Rappie Fuzzing Experiments
 
-This crate is a small, isolated Plank differential fuzzing harness. The current
-target compares bytecode emitted by the `sir-debug` and `sir-release` backends:
+This crate is an isolated Plank differential fuzzing harness. The current target
+compares bytecode emitted by the `sir-debug` and `sir-release` backends:
 
-1. compile the same Plank source with two backends
-2. execute both bytecode outputs in the same EVM
-3. compare observable behavior
+1. decode libFuzzer bytes into a typed Plank program
+2. render that program to `.plk` source
+3. compile the same source with both backends
+4. execute both bytecode outputs in the same EVM
+5. compare observable status and return bytes
 
 ## Layout
 
-- `src/lib.rs`: thin public API for fuzz cases and backend comparison.
-- `src/case.rs`: `FuzzCase`, `arbitrary` decoding, and calldata construction.
-- `src/expr.rs` and `src/program.rs`: generated expression AST and Plank rendering.
+- `src/lib.rs`: public API for fuzz cases and backend comparison.
+- `src/case.rs`: `FuzzCase`, the stable input boundary used by fuzz targets.
+- `src/generator/`: typed program model, `arbitrary` decoding, calldata encoding, and rendering.
 - `src/compiler.rs`, `src/evm.rs`, and `src/oracle.rs`: compile, execute, and compare pipeline.
-- `fuzz/fuzz_targets/plank_backend_expr_diff.rs`: libFuzzer target for generated expression programs.
+- `fuzz/fuzz_targets/plank_backend_program_diff.rs`: libFuzzer target for generated Plank programs.
 
 The crate is included in the `plankc` workspace so it can call compiler crates directly.
 
-## Expression Model
+## Program Generator
 
-The generated-source layer is a tiny expression tree:
+The generator builds a small semantic Plank subset instead of raw syntax nodes. It
+currently emits `init { ... }` programs that read 1 to 4 calldata words, create a flat
+sequence of typed locals, and return one `u256` word.
+
+The internal model is SSA-like:
 
 ```rust
-enum Expr {
-    Const(u64),
-    CalldataWord0,
-    CalldataWord1,
-    Binary {
-        op: BinaryOp,
-        left: Box<Expr>,
-        right: Box<Expr>,
-    },
+Program {
+    input_words: u8,
+    stmts: Vec<Stmt>,
+    result: U256Value,
 }
 ```
 
-`BinaryOp` covers wrapping arithmetic (`+%`, `-%`, `*%`) and bitwise operators (`^`,
-`&`, `|`). Rendering parenthesizes every binary expression, and the only generated
-variables are `a` and `b`, which are defined by the fixed program template.
+Statements are typed `let` bindings for `u256` and `bool`. Expressions may reference
+only calldata inputs or previously generated locals of the correct type. This keeps
+generation valid while still giving libFuzzer room to shrink individual statements.
 
-`render_program` inserts the rendered expression into this init-only template:
+The first operation set uses deterministic no-stdlib EVM builtins:
+
+- `@evm_not`
+- `@evm_add`, `@evm_sub`, `@evm_mul`
+- `@evm_and`, `@evm_or`, `@evm_xor`
+- `@evm_eq`, `@evm_lt`, `@evm_gt`, `@evm_iszero`
+- `if` expressions that select between two `u256` values
+
+Storage, logs, calls, loops, `run`, structs, tuples, imports, and comptime features are
+intentionally deferred until the oracle can check the extra behavior they expose.
+
+## Rendered Source Shape
+
+Generated source is deterministic and readable. A typical program looks like:
 
 ```plk
 init {
-    let a = @evm_calldataload(0);
-    let b = @evm_calldataload(32);
-    let result = <rendered expr>;
+    let in0 = @evm_calldataload(0);
+    let in1 = @evm_calldataload(32);
+
+    let v0 = @evm_add(in0, in1);
+    let b0 = @evm_lt(v0, in0);
+    let v1 = if b0 { v0 } else { in1 };
 
     let out = @malloc_uninit(32);
-    @mstore32(out, result);
+    @mstore32(out, v1);
     @evm_return(out, 32);
 }
 ```
 
-This keeps generation structure-aware: every decoded fuzz input renders to syntactically
-valid Plank for this small program shape.
+Calldata is encoded as one 32-byte big-endian EVM word per generated input.
 
-## Arbitrary Decoding
+## Compile And Oracle Path
 
-`FuzzCase` is the structured input shape decoded by the fuzz target:
+`compile_plank_source(source, backend)` compiles a virtual `main.plk` file in memory
+with `plank_source::source_fs::InMemoryFs`; no temporary source file is written.
 
-```rust
-pub struct FuzzCase {
-    // private fields
-}
-```
-
-It implements `arbitrary::Arbitrary` manually and exposes `source()` and `calldata()`
-for the fuzz target. The expression decoder uses bounded recursion with a maximum depth
-of 4, emits only valid `Expr` nodes, and keeps constants small by decoding `u16` values.
-
-The pipeline is:
+The high-level pipeline is:
 
 ```text
-bytes -> FuzzCase -> Expr -> Plank source -> backend diff
+Plank source -> HIR -> MIR -> bytecode -> revm execution
 ```
 
-## Compile Path
+The default oracle compares `BackendKind::SirDebug` against `BackendKind::SirRelease`.
+`run_bytecode(bytecode, calldata)` installs bytecode at a fixed in-memory account and
+executes a call transaction with the generated calldata.
 
-`compile_plank_source(source, backend)` compiles a virtual `main.plk` file in memory.
-It uses `plank_source::source_fs::InMemoryFs`, so no temporary source file is written.
-
-The function follows the same high-level path as the Plank CLI:
-
-```text
-Plank source
-  -> parse/load project
-  -> lower HIR
-  -> evaluate HIR into MIR
-  -> emit bytecode with selected backend
-```
-
-The selected backend is passed as `plank_driver::BackendKind`. The default oracle uses:
-
-```text
-BackendKind::SirDebug
-BackendKind::SirRelease
-```
-
-The EVM version is fixed to `EvmVersion::Osaka`, matching the current CLI default.
-
-## Execution Oracle
-
-`run_bytecode(bytecode, calldata)` executes already-compiled bytecode with `revm`.
-It inserts the bytecode at a fixed target address in an in-memory `CacheDB<EmptyDB>`,
-then sends a call transaction to that address.
-
-The result is normalized into:
+The normalized execution result is:
 
 ```rust
 pub struct EvmRunResult {
@@ -114,19 +95,9 @@ pub struct EvmRunResult {
 }
 ```
 
-This intentionally ignores gas, storage, logs, and account state for now. The first
-oracle only checks whether both backends agree on success/revert status and output
-bytes. Public comparison APIs return `HarnessError`, which distinguishes compilation
-failures, execution failures, and backend mismatches.
+Gas, storage, logs, and account state are ignored for now.
 
 ## Cargo Fuzz
-
-The coverage-guided target is `plank_backend_expr_diff`. It feeds libFuzzer bytes
-through the `FuzzCase` decoder:
-
-```text
-libFuzzer bytes -> FuzzCase -> Plank source -> sir-debug/sir-release backend diff
-```
 
 Install the runner once:
 
@@ -137,26 +108,25 @@ cargo install cargo-fuzz
 Build the target from `plankc/rappie/`:
 
 ```bash
-cargo +nightly fuzz build plank_backend_expr_diff
+cargo +nightly fuzz build plank_backend_program_diff
 ```
 
 Run it:
 
 ```bash
-cargo +nightly fuzz run plank_backend_expr_diff
+cargo +nightly fuzz run plank_backend_program_diff
 ```
 
 Replay a saved crash:
 
 ```bash
-cargo +nightly fuzz run plank_backend_expr_diff fuzz/artifacts/plank_backend_expr_diff/<crash-file>
+cargo +nightly fuzz run plank_backend_program_diff fuzz/artifacts/plank_backend_program_diff/<crash-file>
 ```
 
 On a backend mismatch, the panic output includes the decoded `FuzzCase`, generated
-Plank source, and backend diff error. Generated corpus, artifact, coverage, and fuzz
-target build directories are ignored under `fuzz/`.
+Plank source, and backend diff error.
 
-## Running
+## Running Tests
 
 From `plankc/`:
 
@@ -172,11 +142,3 @@ cargo +nightly fmt -p rappie --check
 
 The first dependency fetch may need GitHub HTTPS access because the workspace includes
 the Sonatina backend dependency.
-
-## Next Steps
-
-Good small follow-ups:
-
-- add a small seed corpus or replay/debug runner for saved fuzz inputs
-- expand the expression model with more safe `u256` operations
-- compare additional backends once the current oracle is stable

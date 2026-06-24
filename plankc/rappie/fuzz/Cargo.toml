@@ -12,8 +12,8 @@ libfuzzer-sys = "0.4"
 rappie = { path = ".." }
 
 [[bin]]
-name = "plank_backend_expr_diff"
-path = "fuzz_targets/plank_backend_expr_diff.rs"
+name = "plank_backend_program_diff"
+path = "fuzz_targets/plank_backend_program_diff.rs"
 test = false
 doc = false
 bench = false

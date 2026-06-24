@@ -1,9 +1,8 @@
 mod case;
 mod compiler;
 mod evm;
-mod expr;
+mod generator;
 mod oracle;
-mod program;
 
 pub use case::FuzzCase;
 pub use evm::EvmRunResult;
