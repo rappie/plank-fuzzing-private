@@ -1,4 +1,5 @@
-use alloy_primitives::{Bytes, hex};
+use alloy_primitives::{Bytes, U256, hex};
+use arbitrary::{Arbitrary, Unstructured};
 pub use plank_driver::BackendKind;
 use plank_driver::Driver;
 use plank_evm::EvmVersion;
@@ -16,6 +17,7 @@ use std::path::Path;
 
 const MAIN_PATH: &str = "main.plk";
 const TARGET: Address = Address::new([0xCC; 20]);
+pub const MAX_ARBITRARY_EXPR_DEPTH: u8 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmRunResult {
@@ -34,6 +36,33 @@ pub enum Expr {
     Xor(Box<Expr>, Box<Expr>),
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FuzzCase {
+    pub expr: Expr,
+    pub calldata_a: u64,
+    pub calldata_b: u64,
+}
+
+impl FuzzCase {
+    pub fn source(&self) -> String {
+        render_program(&self.expr)
+    }
+
+    pub fn calldata(&self) -> Vec<u8> {
+        calldata_words([self.calldata_a, self.calldata_b])
+    }
+}
+
+impl<'a> Arbitrary<'a> for FuzzCase {
+    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+        Ok(Self {
+            expr: arbitrary_expr(u, MAX_ARBITRARY_EXPR_DEPTH)?,
+            calldata_a: u64::arbitrary(u)?,
+            calldata_b: u64::arbitrary(u)?,
+        })
+    }
 }
 
 pub fn render_expr(expr: &Expr) -> String {
@@ -212,6 +241,49 @@ fn binary_expr(rng: &mut SeededRng, max_depth: u8, make: fn(Box<Expr>, Box<Expr>
         Box::new(generate_expr_with_rng(rng, next_depth)),
         Box::new(generate_expr_with_rng(rng, next_depth)),
     )
+}
+
+fn arbitrary_expr(u: &mut Unstructured<'_>, depth: u8) -> arbitrary::Result<Expr> {
+    if depth == 0 {
+        return arbitrary_leaf(u);
+    }
+
+    match u.int_in_range(0..=8)? {
+        0..=2 => arbitrary_leaf(u),
+        3 => arbitrary_binary_expr(u, depth, Expr::Add),
+        4 => arbitrary_binary_expr(u, depth, Expr::Sub),
+        5 => arbitrary_binary_expr(u, depth, Expr::Mul),
+        6 => arbitrary_binary_expr(u, depth, Expr::Xor),
+        7 => arbitrary_binary_expr(u, depth, Expr::And),
+        8 => arbitrary_binary_expr(u, depth, Expr::Or),
+        _ => unreachable!("int_in_range(0..=8) returns 0..=8"),
+    }
+}
+
+fn arbitrary_leaf(u: &mut Unstructured<'_>) -> arbitrary::Result<Expr> {
+    match u.int_in_range(0..=2)? {
+        0 => Ok(Expr::Const(u64::from(u16::arbitrary(u)?))),
+        1 => Ok(Expr::CalldataWord0),
+        2 => Ok(Expr::CalldataWord1),
+        _ => unreachable!("int_in_range(0..=2) returns 0..=2"),
+    }
+}
+
+fn arbitrary_binary_expr(
+    u: &mut Unstructured<'_>,
+    depth: u8,
+    make: fn(Box<Expr>, Box<Expr>) -> Expr,
+) -> arbitrary::Result<Expr> {
+    let next_depth = depth - 1;
+    Ok(make(Box::new(arbitrary_expr(u, next_depth)?), Box::new(arbitrary_expr(u, next_depth)?)))
+}
+
+fn calldata_words(words: impl IntoIterator<Item = u64>) -> Vec<u8> {
+    let mut calldata = Vec::new();
+    for word in words {
+        calldata.extend_from_slice(&U256::from(word).to_be_bytes::<32>());
+    }
+    calldata
 }
 
 fn same_result(

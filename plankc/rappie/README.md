@@ -76,6 +76,32 @@ before it becomes a fuzz corpus entry.
 This is not coverage-guided fuzzing. It is a deterministic bridge between the
 hand-built expression cases and future `arbitrary`/`cargo-fuzz` support.
 
+## Arbitrary Decoding
+
+`FuzzCase` is the structured input shape that future fuzz targets will decode:
+
+```rust
+pub struct FuzzCase {
+    pub expr: Expr,
+    pub calldata_a: u64,
+    pub calldata_b: u64,
+}
+```
+
+It implements `arbitrary::Arbitrary` manually. The expression decoder uses bounded
+recursion with a maximum depth of 4, emits only valid `Expr` nodes, and keeps constants
+small by decoding `u16` values.
+
+The pipeline is:
+
+```text
+bytes -> FuzzCase -> Expr -> Plank source -> backend diff
+```
+
+This does not replace `render_program` or the seeded generator. It is another input
+source for the same program model. The current test feeds fixed byte slices through
+`FuzzCase::arbitrary`; `cargo-fuzz` can later feed mutated bytes through the same path.
+
 ## Compile Path
 
 `compile_plank_source(source, backend)` compiles a virtual `main.plk` file in memory.
@@ -145,6 +171,10 @@ backend comparison.
 The seeded-expression smoke test renders many bounded expressions from fixed seeds
 and checks them against `small`, `zero`, and `wrap` calldata cases.
 
+The arbitrary-decoding smoke test turns fixed byte slices into `FuzzCase` values,
+renders each decoded case, and runs the same backend comparison. Cases that do not
+decode are skipped.
+
 ## Running
 
 From `plankc/`:
@@ -168,5 +198,4 @@ Good small follow-ups:
 
 - add one or two more fixed Plank smoke programs
 - expand the deterministic expression set with more safe `u256` operations
-- add `arbitrary` support for the same expression model
 - add `cargo-fuzz` only after the compile/run/compare loop is boring

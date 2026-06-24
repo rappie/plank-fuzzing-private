@@ -1,8 +1,11 @@
-use alloy_primitives::U256;
+use alloy_primitives::{U256, hex};
+use arbitrary::{Arbitrary, Unstructured};
 use plank_driver as _;
 use plank_evm as _;
 use plank_source as _;
-use rappie::{Expr, assert_backends_match, backends_match, generate_expr, render_program};
+use rappie::{
+    Expr, FuzzCase, assert_backends_match, backends_match, generate_expr, render_program,
+};
 use revm as _;
 
 const GENERATED_CASES: u64 = 100;
@@ -74,6 +77,41 @@ fn sir_debug_and_sir_release_match_for_seeded_expressions() {
             );
         }
     }
+}
+
+#[test]
+fn sir_debug_and_sir_release_match_for_arbitrary_cases() {
+    let byte_cases = [
+        Vec::new(),
+        vec![0; 32],
+        vec![0xff; 64],
+        b"plank-rappie-arbitrary-case".to_vec(),
+        (0u8..=63).collect::<Vec<_>>(),
+    ];
+
+    let mut decoded_cases = 0;
+    for bytes in byte_cases {
+        let mut unstructured = Unstructured::new(&bytes);
+        let Ok(case) = FuzzCase::arbitrary(&mut unstructured) else {
+            continue;
+        };
+        decoded_cases += 1;
+
+        let source = case.source();
+        let calldata = case.calldata();
+        if let Err(err) = backends_match(&source, &calldata) {
+            panic!(
+                "arbitrary-decoded backend comparison failed\n\
+                 bytes: 0x{}\n\
+                 case: {case:#?}\n\
+                 error:\n{err}\n\n\
+                 source:\n{source}",
+                hex::encode(&bytes)
+            );
+        }
+    }
+
+    assert!(decoded_cases > 0, "expected at least one arbitrary byte case to decode");
 }
 
 fn calldata_words(words: impl IntoIterator<Item = U256>) -> Vec<u8> {
