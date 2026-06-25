@@ -121,7 +121,7 @@ pub(crate) fn run_bytecode_sequence(
             .data(Bytes::copy_from_slice(calldata))
             .value(U256::from(7))
             .gas_price(1_000)
-            .gas_limit(100_000_000)
+            .gas_limit(1_000_000_000)
             .chain_id(Some(1))
             .build()
             .map_err(|err| {

@@ -18,6 +18,7 @@ const RETURN_DATA_OFFSET: usize = 704;
 const EXTCODE_OFFSET: usize = 832;
 const CREATE_OFFSET: usize = 960;
 const LOOP_MEMORY_OFFSET: usize = 1088;
+const CREATE2_NONCE_SLOT: &str = "0x02000000";
 
 const U256_MAX: &str = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 const I256_MIN: &str = "0x8000000000000000000000000000000000000000000000000000000000000000";
@@ -900,7 +901,17 @@ fn render_plank_fragment(
                 CreateKind::Create2 => {
                     writeln!(
                         source,
-                        "    let created_{fragment_index} = @evm_create2(0, {ptr}, {CREATE_INIT_BYTES}, {});",
+                        "    let create_nonce_{fragment_index} = @evm_sload({CREATE2_NONCE_SLOT});"
+                    )
+                    .expect("writing to a string cannot fail");
+                    writeln!(
+                        source,
+                        "    @evm_sstore({CREATE2_NONCE_SLOT}, @evm_add(create_nonce_{fragment_index}, 1));"
+                    )
+                    .expect("writing to a string cannot fail");
+                    writeln!(
+                        source,
+                        "    let created_{fragment_index} = @evm_create2(0, {ptr}, {CREATE_INIT_BYTES}, @evm_xor({}, create_nonce_{fragment_index}));",
                         cfg.constants.expr(*salt)
                     )
                     .expect("writing to a string cannot fail");
@@ -1325,7 +1336,17 @@ fn render_yul_fragment(
                 CreateKind::Create2 => {
                     writeln!(
                         source,
-                        "                let created_{fragment_index} := create2(0, {ptr}, {CREATE_INIT_BYTES}, {})",
+                        "                let create_nonce_{fragment_index} := sload({CREATE2_NONCE_SLOT})"
+                    )
+                    .expect("writing to a string cannot fail");
+                    writeln!(
+                        source,
+                        "                sstore({CREATE2_NONCE_SLOT}, add(create_nonce_{fragment_index}, 1))"
+                    )
+                    .expect("writing to a string cannot fail");
+                    writeln!(
+                        source,
+                        "                let created_{fragment_index} := create2(0, {ptr}, {CREATE_INIT_BYTES}, xor({}, create_nonce_{fragment_index}))",
                         cfg.constants.expr(*salt)
                     )
                     .expect("writing to a string cannot fail");
@@ -1742,7 +1763,10 @@ fn hex_u64(value: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::GeneratedCase;
+    use super::{
+        CallStep, ConstantPool, CreateKind, Entry, EntryConfig, ExitConfig, ExitKind, Fragment,
+        GeneratedCase, ProgramMode,
+    };
     use arbitrary::{Arbitrary, Unstructured};
 
     #[test]
@@ -1773,5 +1797,36 @@ mod tests {
 
         assert_eq!(case.call_count(), case.calldatas().len());
         assert!(case.call_count() >= 1);
+    }
+
+    #[test]
+    fn create2_rendering_uses_nonce_backed_salt() {
+        let case = GeneratedCase {
+            mode: ProgramMode::RawFallback,
+            entries: vec![Entry {
+                selector: 0,
+                config: EntryConfig {
+                    fragments: vec![Fragment::Create { kind: CreateKind::Create2, salt: 4 }],
+                    exit: ExitConfig { kind: ExitKind::Stop, output_len: 0 },
+                    constants: ConstantPool { words: [[0; 32]; 4] },
+                },
+            }],
+            calls: vec![CallStep { selected_entry: 0, payload: Vec::new() }],
+        };
+
+        let plank = case.plank_source();
+        let solidity = case.solidity_source();
+
+        assert!(plank.contains("let create_nonce_0 = @evm_sload(0x02000000);"));
+        assert!(plank.contains("@evm_sstore(0x02000000, @evm_add(create_nonce_0, 1));"));
+        assert!(plank.contains(
+            "let created_0 = @evm_create2(0, scratch +% 960, 13, @evm_xor(0x0, create_nonce_0));"
+        ));
+
+        assert!(solidity.contains("let create_nonce_0 := sload(0x02000000)"));
+        assert!(solidity.contains("sstore(0x02000000, add(create_nonce_0, 1))"));
+        assert!(solidity.contains(
+            "let created_0 := create2(0, add(scratch, 960), 13, xor(0x0, create_nonce_0))"
+        ));
     }
 }
