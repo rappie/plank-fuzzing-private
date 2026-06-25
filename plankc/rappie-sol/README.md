@@ -41,6 +41,16 @@ RAPPIE_SOL_SOLC=/path/to/solc cargo +nightly fuzz run plank_sol_program_diff -- 
 The seed copy is optional once a local corpus already exists, but it helps a new
 corpus reach valid structured programs immediately.
 
+Regenerate the tracked seed corpus after generator changes:
+
+```bash
+RAPPIE_SOL_SOLC=/path/to/solc cargo run --bin seedgen -- --target 48
+```
+
+`seedgen` decodes deterministic candidate byte buffers, buckets the resulting
+cases by generated-program shape, validates selected candidates through the full
+Plank/Solidity oracle, and rewrites `fuzz/seeds/plank_sol_program_diff/`.
+
 Replay a saved crash:
 
 ```bash

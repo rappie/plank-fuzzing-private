@@ -41,11 +41,29 @@ pub fn compare_plank_solidity(case: &FuzzCase) -> Result<(), HarnessError> {
     compare_sources(&plank_source, &solidity_source, &calldata)
 }
 
+pub fn execute_plank_solidity(case: &FuzzCase) -> Result<(Execution, Execution), HarnessError> {
+    let plank_source = case.plank_source();
+    let solidity_source = case.solidity_source();
+    let calldata = case.calldata();
+
+    execute_sources(&plank_source, &solidity_source, &calldata)
+}
+
 pub fn compare_sources(
     plank_source: &str,
     solidity_source: &str,
     calldata: &[u8],
 ) -> Result<(), HarnessError> {
+    let (plank, solidity) = execute_sources(plank_source, solidity_source, calldata)?;
+
+    compare_results(plank, solidity)
+}
+
+fn execute_sources(
+    plank_source: &str,
+    solidity_source: &str,
+    calldata: &[u8],
+) -> Result<(Execution, Execution), HarnessError> {
     let plank_bytecode = compile_plank_source(plank_source, PLANK_BACKEND, PLANK_OPTIMIZATIONS)
         .map_err(|err| HarnessError::PlankCompile { diagnostics: err.diagnostics().to_string() })?;
     let solidity_bytecode = compile_solidity_source(solidity_source)
@@ -62,7 +80,7 @@ pub fn compare_sources(
             .map_err(|err| HarnessError::SolidityExecute { message: err.to_string() })?,
     };
 
-    compare_results(plank, solidity)
+    Ok((plank, solidity))
 }
 
 impl fmt::Display for HarnessError {

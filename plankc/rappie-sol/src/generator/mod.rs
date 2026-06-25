@@ -21,6 +21,72 @@ const U256_MAX: &str = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffff
 const I256_MIN: &str = "0x8000000000000000000000000000000000000000000000000000000000000000";
 const I256_MAX: &str = "0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SeedProgramMode {
+    RawFallback,
+    SelectorDispatch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SeedEntryPosition {
+    Only,
+    First,
+    Middle,
+    Last,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SeedExitKind {
+    ReturnWords,
+    ReturnBytes,
+    RevertWords,
+    RevertBytes,
+    Conditional,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SeedCallKind {
+    EchoCall,
+    EchoStaticCall,
+    RevertCall,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SeedDynamicLenBucket {
+    Zero,
+    One,
+    WordMinusOne,
+    Word,
+    WordPlusOne,
+    Max,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SeedClassification {
+    pub mode: SeedProgramMode,
+    pub entry_count: usize,
+    pub selected_entry: usize,
+    pub selected_entry_position: SeedEntryPosition,
+    pub input_words: usize,
+    pub exit_kind: SeedExitKind,
+    pub call_kind: SeedCallKind,
+    pub return_words: usize,
+    pub dynamic_len: usize,
+    pub dynamic_len_bucket: SeedDynamicLenBucket,
+    pub loop_iterations: usize,
+    pub memory_slots: usize,
+    pub storage_slots: usize,
+    pub log_topics: usize,
+    pub log_words: usize,
+    pub shift: usize,
+    pub byte_index: usize,
+    pub has_zero_calldata: bool,
+    pub has_one_calldata: bool,
+    pub has_u64_max_calldata: bool,
+    pub has_alternating_calldata: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GeneratedCase {
     mode: ProgramMode,
@@ -118,6 +184,41 @@ impl GeneratedCase {
         calldata
     }
 
+    pub(crate) fn seed_classification(&self) -> SeedClassification {
+        let selected = &self.entries[self.selected_entry];
+        let config = &selected.config;
+
+        SeedClassification {
+            mode: self.mode.into(),
+            entry_count: self.entries.len(),
+            selected_entry: self.selected_entry,
+            selected_entry_position: selected_entry_position(
+                self.selected_entry,
+                self.entries.len(),
+            ),
+            input_words: selected.input_words,
+            exit_kind: config.exit_kind.into(),
+            call_kind: config.call_kind.into(),
+            return_words: config.return_words,
+            dynamic_len: config.dynamic_len,
+            dynamic_len_bucket: dynamic_len_bucket(config.dynamic_len),
+            loop_iterations: config.loop_iterations,
+            memory_slots: config.memory_slots,
+            storage_slots: config.storage_slots,
+            log_topics: config.log_topics,
+            log_words: config.log_words,
+            shift: config.shift,
+            byte_index: config.byte_index,
+            has_zero_calldata: self.calldata_words.contains(&0),
+            has_one_calldata: self.calldata_words.contains(&1),
+            has_u64_max_calldata: self.calldata_words.contains(&u64::MAX),
+            has_alternating_calldata: self
+                .calldata_words
+                .iter()
+                .any(|word| matches!(*word, 0x5555_5555_5555_5555 | 0xaaaa_aaaa_aaaa_aaaa)),
+        }
+    }
+
     #[cfg(test)]
     fn selected_entry(&self) -> &Entry {
         &self.entries[self.selected_entry]
@@ -153,6 +254,15 @@ impl<'a> Arbitrary<'a> for GeneratedCase {
 enum ProgramMode {
     RawFallback,
     SelectorDispatch,
+}
+
+impl From<ProgramMode> for SeedProgramMode {
+    fn from(mode: ProgramMode) -> Self {
+        match mode {
+            ProgramMode::RawFallback => Self::RawFallback,
+            ProgramMode::SelectorDispatch => Self::SelectorDispatch,
+        }
+    }
 }
 
 impl ProgramMode {
@@ -227,6 +337,16 @@ enum CallKind {
     RevertCall,
 }
 
+impl From<CallKind> for SeedCallKind {
+    fn from(kind: CallKind) -> Self {
+        match kind {
+            CallKind::EchoCall => Self::EchoCall,
+            CallKind::EchoStaticCall => Self::EchoStaticCall,
+            CallKind::RevertCall => Self::RevertCall,
+        }
+    }
+}
+
 impl CallKind {
     fn arbitrary(u: &mut Unstructured<'_>) -> arbitrary::Result<Self> {
         Ok(match u.int_in_range(0..=2)? {
@@ -244,6 +364,18 @@ enum ExitKind {
     RevertWords,
     RevertBytes,
     Conditional,
+}
+
+impl From<ExitKind> for SeedExitKind {
+    fn from(kind: ExitKind) -> Self {
+        match kind {
+            ExitKind::ReturnWords => Self::ReturnWords,
+            ExitKind::ReturnBytes => Self::ReturnBytes,
+            ExitKind::RevertWords => Self::RevertWords,
+            ExitKind::RevertBytes => Self::RevertBytes,
+            ExitKind::Conditional => Self::Conditional,
+        }
+    }
 }
 
 impl ExitKind {
@@ -820,6 +952,30 @@ fn storage_slot(entry_index: usize, slot_index: usize, cfg: &EntryConfig) -> u64
         + ((entry_index as u64) << 16)
         + ((slot_index as u64) << 8)
         + u64::from(cfg.salt & 0xff)
+}
+
+fn selected_entry_position(selected_entry: usize, entry_count: usize) -> SeedEntryPosition {
+    if entry_count == 1 {
+        SeedEntryPosition::Only
+    } else if selected_entry == 0 {
+        SeedEntryPosition::First
+    } else if selected_entry + 1 == entry_count {
+        SeedEntryPosition::Last
+    } else {
+        SeedEntryPosition::Middle
+    }
+}
+
+fn dynamic_len_bucket(len: usize) -> SeedDynamicLenBucket {
+    match len {
+        0 => SeedDynamicLenBucket::Zero,
+        1 => SeedDynamicLenBucket::One,
+        31 => SeedDynamicLenBucket::WordMinusOne,
+        32 => SeedDynamicLenBucket::Word,
+        33 => SeedDynamicLenBucket::WordPlusOne,
+        MAX_DYNAMIC_BYTES => SeedDynamicLenBucket::Max,
+        _ => SeedDynamicLenBucket::Other,
+    }
 }
 
 fn edge_constant(cfg: &EntryConfig, index: usize) -> String {
