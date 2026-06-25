@@ -74,7 +74,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires RAPPIE_SOL_SOLC, SOLC_PATH, or solc on PATH"]
+    #[ignore = "requires RAPPIE_SOL_SOLX, SOLX_PATH, or solx on PATH"]
     fn committed_seeds_compare_plank_solidity() {
         for (name, case) in committed_seed_cases() {
             crate::compare_plank_solidity(&case)

@@ -1,6 +1,6 @@
 use crate::{
     FuzzCase,
-    compiler::{plank::compile_plank_source, solc::compile_solidity_source},
+    compiler::{plank::compile_plank_source, solx::compile_solidity_source},
     evm::{EvmRunResult, run_bytecode},
 };
 use alloy_primitives::hex;

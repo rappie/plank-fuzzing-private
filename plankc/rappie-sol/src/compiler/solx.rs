@@ -13,7 +13,7 @@ const EVM_VERSION_FALLBACKS: [&str; 4] = ["osaka", "prague", "cancun", "shanghai
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CompileError {
-    SolcUnavailable { path: PathBuf, message: String },
+    SolxUnavailable { path: PathBuf, message: String },
     ProcessFailed { status: String, stderr: String },
     InvalidJson { message: String, stdout: String, stderr: String },
     CompilerDiagnostics { diagnostics: String },
@@ -25,23 +25,23 @@ pub(crate) enum CompileError {
 impl fmt::Display for CompileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SolcUnavailable { path, message } => {
-                write!(f, "could not execute solc at {}: {message}", path.display())
+            Self::SolxUnavailable { path, message } => {
+                write!(f, "could not execute solx at {}: {message}", path.display())
             }
             Self::ProcessFailed { status, stderr } => {
-                write!(f, "solc exited with {status}:\n{stderr}")
+                write!(f, "solx exited with {status}:\n{stderr}")
             }
             Self::InvalidJson { message, stdout, stderr } => {
                 write!(
                     f,
-                    "solc produced invalid JSON: {message}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+                    "solx produced invalid JSON: {message}\nstdout:\n{stdout}\nstderr:\n{stderr}"
                 )
             }
             Self::CompilerDiagnostics { diagnostics } => f.write_str(diagnostics),
             Self::MissingBytecode { message } | Self::InvalidBytecode { message } => {
                 f.write_str(message)
             }
-            Self::StdinUnavailable => f.write_str("solc stdin was unavailable"),
+            Self::StdinUnavailable => f.write_str("solx stdin was unavailable"),
         }
     }
 }
@@ -49,11 +49,11 @@ impl fmt::Display for CompileError {
 impl std::error::Error for CompileError {}
 
 pub(crate) fn compile_solidity_source(source: &str) -> Result<Vec<u8>, CompileError> {
-    let solc = resolve_solc();
+    let solx = resolve_solx();
     let mut last_invalid_evm_version = None;
 
     for evm_version in EVM_VERSION_FALLBACKS {
-        match compile_with_evm_version(source, &solc, evm_version) {
+        match compile_with_evm_version(source, &solx, evm_version) {
             Ok(bytecode) => return Ok(bytecode),
             Err(err) if is_invalid_evm_version(&err) => {
                 last_invalid_evm_version = Some(err);
@@ -63,33 +63,33 @@ pub(crate) fn compile_solidity_source(source: &str) -> Result<Vec<u8>, CompileEr
     }
 
     Err(last_invalid_evm_version.unwrap_or_else(|| CompileError::CompilerDiagnostics {
-        diagnostics: "solc did not accept any configured EVM version".to_string(),
+        diagnostics: "solx did not accept any configured EVM version".to_string(),
     }))
 }
 
-fn resolve_solc() -> PathBuf {
-    env::var_os("RAPPIE_SOL_SOLC")
-        .or_else(|| env::var_os("SOLC_PATH"))
+fn resolve_solx() -> PathBuf {
+    env::var_os("RAPPIE_SOL_SOLX")
+        .or_else(|| env::var_os("SOLX_PATH"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("solc"))
+        .unwrap_or_else(|| PathBuf::from("solx"))
 }
 
 fn compile_with_evm_version(
     source: &str,
-    solc: &PathBuf,
+    solx: &PathBuf,
     evm_version: &str,
 ) -> Result<Vec<u8>, CompileError> {
     let input = standard_json_input(source, evm_version);
     let input = serde_json::to_vec(&input).expect("standard JSON input should serialize");
 
-    let mut child = Command::new(solc)
-        .arg("--standard-json")
+    let mut child = Command::new(solx)
+        .args(solx_args())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|err| CompileError::SolcUnavailable {
-            path: solc.clone(),
+        .map_err(|err| CompileError::SolxUnavailable {
+            path: solx.clone(),
             message: err.to_string(),
         })?;
 
@@ -101,7 +101,7 @@ fn compile_with_evm_version(
     drop(stdin);
 
     let output = child.wait_with_output().map_err(|err| CompileError::ProcessFailed {
-        status: "while waiting for solc".to_string(),
+        status: "while waiting for solx".to_string(),
         stderr: err.to_string(),
     })?;
 
@@ -128,21 +128,25 @@ fn compile_with_evm_version(
 
     let bytecode = deployed_bytecode(&parsed).ok_or_else(|| CompileError::MissingBytecode {
         message: format!(
-            "solc output did not contain contracts.{MAIN_SOURCE}.{CONTRACT_NAME}.evm.deployedBytecode.object"
+            "solx output did not contain contracts.{MAIN_SOURCE}.{CONTRACT_NAME}.evm.deployedBytecode.object"
         ),
     })?;
 
     if bytecode.is_empty() {
         return Err(CompileError::MissingBytecode {
-            message: "solc produced empty deployed bytecode".to_string(),
+            message: "solx produced empty deployed bytecode".to_string(),
         });
     }
 
     hex::decode(bytecode.strip_prefix("0x").unwrap_or(bytecode)).map_err(|err| {
         CompileError::InvalidBytecode {
-            message: format!("solc produced invalid hex bytecode: {err}"),
+            message: format!("solx produced invalid hex bytecode: {err}"),
         }
     })
+}
+
+fn solx_args() -> [&'static str; 3] {
+    ["--standard-json", "--threads", "1"]
 }
 
 fn standard_json_input(source: &str, evm_version: &str) -> Value {
@@ -172,10 +176,10 @@ fn compiler_error_diagnostics(output: &Value) -> Option<String> {
     let has_error =
         errors.iter().any(|error| error.get("severity").and_then(Value::as_str) == Some("error"));
 
-    has_error.then(|| render_solc_errors(errors))
+    has_error.then(|| render_solx_errors(errors))
 }
 
-fn render_solc_errors(errors: &[Value]) -> String {
+fn render_solx_errors(errors: &[Value]) -> String {
     errors
         .iter()
         .map(|error| {
@@ -183,7 +187,7 @@ fn render_solc_errors(errors: &[Value]) -> String {
                 .get("formattedMessage")
                 .and_then(Value::as_str)
                 .or_else(|| error.get("message").and_then(Value::as_str))
-                .unwrap_or("solc reported an error without a message")
+                .unwrap_or("solx reported an error without a message")
                 .trim()
                 .to_string()
         })
@@ -214,7 +218,7 @@ fn is_invalid_evm_version(err: &CompileError) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{compile_solidity_source, standard_json_input};
+    use super::{compile_solidity_source, solx_args, standard_json_input};
 
     const FALLBACK_SOURCE: &str = r#"
 // SPDX-License-Identifier: MIT
@@ -242,7 +246,12 @@ contract C {
     }
 
     #[test]
-    #[ignore = "requires RAPPIE_SOL_SOLC, SOLC_PATH, or solc on PATH"]
+    fn solx_args_pin_one_compiler_thread() {
+        assert_eq!(solx_args(), ["--standard-json", "--threads", "1"]);
+    }
+
+    #[test]
+    #[ignore = "requires RAPPIE_SOL_SOLX, SOLX_PATH, or solx on PATH"]
     fn compiles_minimal_fallback_contract() {
         let bytecode =
             compile_solidity_source(FALLBACK_SOURCE).expect("fallback source should compile");
