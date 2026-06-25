@@ -4,8 +4,7 @@ use plank_driver as _;
 use plank_evm as _;
 use plank_source as _;
 use rappie_sol::{
-    FuzzCase, SeedCallKind, SeedClassification, SeedDynamicLenBucket, SeedEntryPosition,
-    SeedExitKind, SeedProgramMode, execute_plank_solidity,
+    FuzzCase, SeedClassification, SeedExitKind, SeedProgramMode, execute_plank_solidity,
 };
 use revm as _;
 use serde_json as _;
@@ -16,55 +15,47 @@ use std::{
     process::ExitCode,
 };
 
-const DEFAULT_TARGET: usize = 48;
-const DEFAULT_CANDIDATE_LIMIT: usize = 100_000;
+const DEFAULT_TARGET: usize = 96;
+const DEFAULT_CANDIDATE_LIMIT: usize = 300_000;
 const DEFAULT_OUTPUT_DIR: &str = "fuzz/seeds/plank_sol_program_diff";
-const SIZES: [usize; 7] = [64, 128, 256, 512, 1024, 2048, 4096];
+const SIZES: [usize; 7] = [128, 256, 512, 1024, 2048, 4096, 8192];
 
 const ALL_BUCKETS: &[Bucket] = &[
     Bucket::RawFallback,
-    Bucket::SelectorDispatch1,
-    Bucket::SelectorDispatch4,
-    Bucket::SelectedFirstEntry,
-    Bucket::SelectedLastEntry,
-    Bucket::ReturnWords,
-    Bucket::ReturnBytes,
-    Bucket::RevertWords,
-    Bucket::RevertBytes,
-    Bucket::ConditionalReturn,
-    Bucket::ConditionalRevert,
-    Bucket::DynamicLenZero,
-    Bucket::DynamicLenOne,
-    Bucket::DynamicLenWordMinusOne,
-    Bucket::DynamicLenWord,
-    Bucket::DynamicLenWordPlusOne,
-    Bucket::DynamicLenMax,
-    Bucket::Log0,
+    Bucket::SelectorDispatch,
+    Bucket::DispatchMax,
+    Bucket::MultiCall,
+    Bucket::MaxCallCount,
+    Bucket::MultiEntryTouched,
+    Bucket::ShortCalldata,
+    Bucket::UnalignedCalldata,
+    Bucket::FullWidthWord,
+    Bucket::Arithmetic,
+    Bucket::SignedArithmetic,
+    Bucket::MemoryWidth,
+    Bucket::MemoryCopy,
+    Bucket::CalldataCopy,
+    Bucket::Storage,
+    Bucket::RepeatedStorageSlot,
+    Bucket::TransientStorage,
+    Bucket::ExternalCode,
+    Bucket::Call,
+    Bucket::DelegateCall,
+    Bucket::Returndata,
+    Bucket::Create,
+    Bucket::Create2,
+    Bucket::Log,
     Bucket::Log4,
-    Bucket::LogDataZero,
-    Bucket::LogDataMax,
-    Bucket::StorageOne,
-    Bucket::StorageMax,
-    Bucket::LoopZero,
-    Bucket::LoopMax,
-    Bucket::MemoryOne,
-    Bucket::MemoryMax,
-    Bucket::EchoCall,
-    Bucket::EchoStaticCall,
-    Bucket::RevertCall,
-    Bucket::CalldataZero,
-    Bucket::CalldataOne,
-    Bucket::CalldataU64Max,
-    Bucket::CalldataAlternating,
-    Bucket::ShiftZero,
-    Bucket::ShiftMax,
-    Bucket::ByteIndexZero,
-    Bucket::ByteIndexLast,
-    Bucket::StressDispatchLogs,
-    Bucket::StressDispatchStorage,
-    Bucket::StressLoopCall,
-    Bucket::StressDynamicConditional,
-    Bucket::StressStorageLogsCall,
+    Bucket::Branch,
+    Bucket::Loop,
+    Bucket::ReturnExit,
+    Bucket::RevertExit,
+    Bucket::ConditionalExit,
+    Bucket::StopExit,
+    Bucket::InvalidExit,
+    Bucket::StorageAndMultiCall,
+    Bucket::CallAndReturndata,
+    Bucket::CreateAndExternalCode,
 ];
 
 fn main() -> ExitCode {
@@ -84,6 +75,14 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if config.target < ALL_BUCKETS.len() {
+        return Err(format!(
+            "target {} is smaller than the {} required buckets",
+            config.target,
+            ALL_BUCKETS.len()
+        ));
+    }
+
     let fixed = fixed_candidates();
     let mut covered = BTreeSet::new();
     let mut seen_combos = HashSet::new();
@@ -100,35 +99,21 @@ fn run() -> Result<(), String> {
         stats.decoded += 1;
 
         let classification = case.seed_classification();
-        let static_buckets = buckets_for(&classification, None);
+        let buckets = buckets_for(&classification);
         let combo = ComboKey::from(classification);
-        let could_cover_conditional = classification.exit_kind == SeedExitKind::Conditional
-            && (!covered.contains(&Bucket::ConditionalReturn)
-                || !covered.contains(&Bucket::ConditionalRevert));
-        let has_new_static_bucket = static_buckets.iter().any(|bucket| !covered.contains(bucket));
+        let has_new_bucket = buckets.iter().any(|bucket| !covered.contains(bucket));
         let has_new_combo = !seen_combos.contains(&combo);
 
-        if !has_new_static_bucket
-            && !could_cover_conditional
-            && (selected.len() >= config.target || !has_new_combo)
-        {
+        if !has_new_bucket && (selected.len() >= config.target || !has_new_combo) {
             continue;
         }
 
-        let success = if config.verify {
-            match verified_success(&case) {
-                Some(success) => success,
-                None => {
-                    stats.rejected += 1;
-                    continue;
-                }
-            }
-        } else {
-            true
-        };
+        if config.verify && !verified(&case) {
+            stats.rejected += 1;
+            continue;
+        }
         stats.verified += 1;
 
-        let buckets = buckets_for(&classification, Some(success));
         let new_buckets =
             buckets.iter().copied().filter(|bucket| !covered.contains(bucket)).collect::<Vec<_>>();
         let has_new_combo = seen_combos.insert(combo);
@@ -140,7 +125,7 @@ fn run() -> Result<(), String> {
         let name_bucket = new_buckets.first().copied().unwrap_or(Bucket::ComboExtra);
         let name = next_seed_name(name_bucket, &mut name_counts);
         covered.extend(buckets.iter().copied());
-        selected.push(SelectedSeed { name, bytes, classification, buckets, success });
+        selected.push(SelectedSeed { name, bytes, classification, buckets });
 
         if selected.len() >= config.target && covered.len() == ALL_BUCKETS.len() {
             break;
@@ -185,13 +170,13 @@ fn run() -> Result<(), String> {
     );
     for seed in &selected {
         println!(
-            "{}: {:?}, success={}, mode={:?}, exit={:?}, call={:?}",
+            "{}: {:?}, mode={:?}, entries={}, calls={}, exit={:?}",
             seed.name,
             seed.buckets,
-            seed.success,
             seed.classification.mode,
-            seed.classification.exit_kind,
-            seed.classification.call_kind
+            seed.classification.entry_count,
+            seed.classification.call_count,
+            seed.classification.exit_kind
         );
     }
 
@@ -263,32 +248,58 @@ struct SelectedSeed {
     bytes: Vec<u8>,
     classification: SeedClassification,
     buckets: Vec<Bucket>,
-    success: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ComboKey {
     mode: SeedProgramMode,
     entry_count: usize,
+    call_count: usize,
     exit_kind: SeedExitKind,
-    call_kind: SeedCallKind,
-    log_topics: usize,
-    storage_slots: usize,
-    loop_iterations: usize,
-    dynamic_len_bucket: SeedDynamicLenBucket,
+    max_log_topics: usize,
+    flags: u32,
 }
 
 impl From<SeedClassification> for ComboKey {
     fn from(classification: SeedClassification) -> Self {
+        let mut flags = 0u32;
+        let bools = [
+            classification.touches_multiple_entries,
+            classification.has_short_calldata,
+            classification.has_unaligned_calldata,
+            classification.has_full_width_word,
+            classification.has_arithmetic,
+            classification.has_signed_arithmetic,
+            classification.has_memory_width,
+            classification.has_memory_copy,
+            classification.has_calldata_copy,
+            classification.has_storage,
+            classification.has_repeated_storage_slot,
+            classification.has_transient_storage,
+            classification.has_external_code,
+            classification.has_call,
+            classification.has_delegatecall,
+            classification.has_returndata,
+            classification.has_create,
+            classification.has_create2,
+            classification.has_log,
+            classification.has_branch,
+            classification.has_loop,
+        ];
+
+        for (index, active) in bools.into_iter().enumerate() {
+            if active {
+                flags |= 1 << index;
+            }
+        }
+
         Self {
             mode: classification.mode,
             entry_count: classification.entry_count,
+            call_count: classification.call_count,
             exit_kind: classification.exit_kind,
-            call_kind: classification.call_kind,
-            log_topics: classification.log_topics,
-            storage_slots: classification.storage_slots,
-            loop_iterations: classification.loop_iterations,
-            dynamic_len_bucket: classification.dynamic_len_bucket,
+            max_log_topics: classification.max_log_topics,
+            flags,
         }
     }
 }
@@ -296,48 +307,40 @@ impl From<SeedClassification> for ComboKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Bucket {
     RawFallback,
-    SelectorDispatch1,
-    SelectorDispatch4,
-    SelectedFirstEntry,
-    SelectedLastEntry,
-    ReturnWords,
-    ReturnBytes,
-    RevertWords,
-    RevertBytes,
-    ConditionalReturn,
-    ConditionalRevert,
-    DynamicLenZero,
-    DynamicLenOne,
-    DynamicLenWordMinusOne,
-    DynamicLenWord,
-    DynamicLenWordPlusOne,
-    DynamicLenMax,
-    Log0,
+    SelectorDispatch,
+    DispatchMax,
+    MultiCall,
+    MaxCallCount,
+    MultiEntryTouched,
+    ShortCalldata,
+    UnalignedCalldata,
+    FullWidthWord,
+    Arithmetic,
+    SignedArithmetic,
+    MemoryWidth,
+    MemoryCopy,
+    CalldataCopy,
+    Storage,
+    RepeatedStorageSlot,
+    TransientStorage,
+    ExternalCode,
+    Call,
+    DelegateCall,
+    Returndata,
+    Create,
+    Create2,
+    Log,
     Log4,
-    LogDataZero,
-    LogDataMax,
-    StorageOne,
-    StorageMax,
-    LoopZero,
-    LoopMax,
-    MemoryOne,
-    MemoryMax,
-    EchoCall,
-    EchoStaticCall,
-    RevertCall,
-    CalldataZero,
-    CalldataOne,
-    CalldataU64Max,
-    CalldataAlternating,
-    ShiftZero,
-    ShiftMax,
-    ByteIndexZero,
-    ByteIndexLast,
-    StressDispatchLogs,
-    StressDispatchStorage,
-    StressLoopCall,
-    StressDynamicConditional,
-    StressStorageLogsCall,
+    Branch,
+    Loop,
+    ReturnExit,
+    RevertExit,
+    ConditionalExit,
+    StopExit,
+    InvalidExit,
+    StorageAndMultiCall,
+    CallAndReturndata,
+    CreateAndExternalCode,
     ComboExtra,
 }
 
@@ -352,135 +355,121 @@ fn decode_case(bytes: &[u8]) -> Option<FuzzCase> {
     FuzzCase::arbitrary(&mut unstructured).ok()
 }
 
-fn verified_success(case: &FuzzCase) -> Option<bool> {
-    let (plank, solidity) = execute_plank_solidity(case).ok()?;
-    (plank.result == solidity.result).then_some(plank.result.success)
+fn verified(case: &FuzzCase) -> bool {
+    let Ok((plank, solidity)) = execute_plank_solidity(case) else {
+        return false;
+    };
+
+    plank.trace == solidity.trace
 }
 
-fn buckets_for(classification: &SeedClassification, success: Option<bool>) -> Vec<Bucket> {
+fn buckets_for(classification: &SeedClassification) -> Vec<Bucket> {
     let mut buckets = Vec::new();
 
     match classification.mode {
         SeedProgramMode::RawFallback => buckets.push(Bucket::RawFallback),
-        SeedProgramMode::SelectorDispatch => match classification.entry_count {
-            1 => buckets.push(Bucket::SelectorDispatch1),
-            4 => buckets.push(Bucket::SelectorDispatch4),
-            _ => {}
-        },
+        SeedProgramMode::SelectorDispatch => buckets.push(Bucket::SelectorDispatch),
     }
 
-    match classification.selected_entry_position {
-        SeedEntryPosition::First => buckets.push(Bucket::SelectedFirstEntry),
-        SeedEntryPosition::Last => buckets.push(Bucket::SelectedLastEntry),
-        SeedEntryPosition::Only | SeedEntryPosition::Middle => {}
+    if classification.entry_count >= 6 {
+        buckets.push(Bucket::DispatchMax);
     }
-
-    match classification.exit_kind {
-        SeedExitKind::ReturnWords => buckets.push(Bucket::ReturnWords),
-        SeedExitKind::ReturnBytes => buckets.push(Bucket::ReturnBytes),
-        SeedExitKind::RevertWords => buckets.push(Bucket::RevertWords),
-        SeedExitKind::RevertBytes => buckets.push(Bucket::RevertBytes),
-        SeedExitKind::Conditional => match success {
-            Some(true) => buckets.push(Bucket::ConditionalReturn),
-            Some(false) => buckets.push(Bucket::ConditionalRevert),
-            None => {}
-        },
+    if classification.call_count > 1 {
+        buckets.push(Bucket::MultiCall);
     }
-
-    match classification.dynamic_len_bucket {
-        SeedDynamicLenBucket::Zero => buckets.push(Bucket::DynamicLenZero),
-        SeedDynamicLenBucket::One => buckets.push(Bucket::DynamicLenOne),
-        SeedDynamicLenBucket::WordMinusOne => buckets.push(Bucket::DynamicLenWordMinusOne),
-        SeedDynamicLenBucket::Word => buckets.push(Bucket::DynamicLenWord),
-        SeedDynamicLenBucket::WordPlusOne => buckets.push(Bucket::DynamicLenWordPlusOne),
-        SeedDynamicLenBucket::Max => buckets.push(Bucket::DynamicLenMax),
-        SeedDynamicLenBucket::Other => {}
+    if classification.call_count >= 4 {
+        buckets.push(Bucket::MaxCallCount);
     }
-
-    if classification.log_topics == 0 {
-        buckets.push(Bucket::Log0);
+    if classification.touches_multiple_entries {
+        buckets.push(Bucket::MultiEntryTouched);
     }
-    if classification.log_topics == 4 {
+    if classification.has_short_calldata {
+        buckets.push(Bucket::ShortCalldata);
+    }
+    if classification.has_unaligned_calldata {
+        buckets.push(Bucket::UnalignedCalldata);
+    }
+    if classification.has_full_width_word {
+        buckets.push(Bucket::FullWidthWord);
+    }
+    if classification.has_arithmetic {
+        buckets.push(Bucket::Arithmetic);
+    }
+    if classification.has_signed_arithmetic {
+        buckets.push(Bucket::SignedArithmetic);
+    }
+    if classification.has_memory_width {
+        buckets.push(Bucket::MemoryWidth);
+    }
+    if classification.has_memory_copy {
+        buckets.push(Bucket::MemoryCopy);
+    }
+    if classification.has_calldata_copy {
+        buckets.push(Bucket::CalldataCopy);
+    }
+    if classification.has_storage {
+        buckets.push(Bucket::Storage);
+    }
+    if classification.has_repeated_storage_slot {
+        buckets.push(Bucket::RepeatedStorageSlot);
+    }
+    if classification.has_transient_storage {
+        buckets.push(Bucket::TransientStorage);
+    }
+    if classification.has_external_code {
+        buckets.push(Bucket::ExternalCode);
+    }
+    if classification.has_call {
+        buckets.push(Bucket::Call);
+    }
+    if classification.has_delegatecall {
+        buckets.push(Bucket::DelegateCall);
+    }
+    if classification.has_returndata {
+        buckets.push(Bucket::Returndata);
+    }
+    if classification.has_create {
+        buckets.push(Bucket::Create);
+    }
+    if classification.has_create2 {
+        buckets.push(Bucket::Create2);
+    }
+    if classification.has_log {
+        buckets.push(Bucket::Log);
+    }
+    if classification.max_log_topics == 4 {
         buckets.push(Bucket::Log4);
     }
-    if classification.log_words == 0 {
-        buckets.push(Bucket::LogDataZero);
+    if classification.has_branch {
+        buckets.push(Bucket::Branch);
     }
-    if classification.log_words == 4 {
-        buckets.push(Bucket::LogDataMax);
+    if classification.has_loop {
+        buckets.push(Bucket::Loop);
     }
-    if classification.storage_slots == 1 {
-        buckets.push(Bucket::StorageOne);
+    if classification.has_return_exit {
+        buckets.push(Bucket::ReturnExit);
     }
-    if classification.storage_slots == 3 {
-        buckets.push(Bucket::StorageMax);
+    if classification.has_revert_exit {
+        buckets.push(Bucket::RevertExit);
     }
-    if classification.loop_iterations == 0 {
-        buckets.push(Bucket::LoopZero);
+    if classification.has_conditional_exit {
+        buckets.push(Bucket::ConditionalExit);
     }
-    if classification.loop_iterations == 8 {
-        buckets.push(Bucket::LoopMax);
+    if classification.has_stop_exit {
+        buckets.push(Bucket::StopExit);
     }
-    if classification.memory_slots == 1 {
-        buckets.push(Bucket::MemoryOne);
+    if classification.has_invalid_exit {
+        buckets.push(Bucket::InvalidExit);
     }
-    if classification.memory_slots == 6 {
-        buckets.push(Bucket::MemoryMax);
+    if classification.has_storage && classification.call_count > 1 {
+        buckets.push(Bucket::StorageAndMultiCall);
     }
-
-    match classification.call_kind {
-        SeedCallKind::EchoCall => buckets.push(Bucket::EchoCall),
-        SeedCallKind::EchoStaticCall => buckets.push(Bucket::EchoStaticCall),
-        SeedCallKind::RevertCall => buckets.push(Bucket::RevertCall),
+    if classification.has_call && classification.has_returndata {
+        buckets.push(Bucket::CallAndReturndata);
     }
-
-    if classification.has_zero_calldata {
-        buckets.push(Bucket::CalldataZero);
-    }
-    if classification.has_one_calldata {
-        buckets.push(Bucket::CalldataOne);
-    }
-    if classification.has_u64_max_calldata {
-        buckets.push(Bucket::CalldataU64Max);
-    }
-    if classification.has_alternating_calldata {
-        buckets.push(Bucket::CalldataAlternating);
-    }
-    if classification.shift == 0 {
-        buckets.push(Bucket::ShiftZero);
-    }
-    if classification.shift == 255 {
-        buckets.push(Bucket::ShiftMax);
-    }
-    if classification.byte_index == 0 {
-        buckets.push(Bucket::ByteIndexZero);
-    }
-    if classification.byte_index == 31 {
-        buckets.push(Bucket::ByteIndexLast);
-    }
-
-    if classification.mode == SeedProgramMode::SelectorDispatch
-        && classification.entry_count == 4
-        && classification.log_topics == 4
+    if classification.has_external_code && (classification.has_create || classification.has_create2)
     {
-        buckets.push(Bucket::StressDispatchLogs);
-    }
-    if classification.mode == SeedProgramMode::SelectorDispatch
-        && classification.entry_count == 4
-        && classification.storage_slots == 3
-    {
-        buckets.push(Bucket::StressDispatchStorage);
-    }
-    if classification.loop_iterations == 8 {
-        buckets.push(Bucket::StressLoopCall);
-    }
-    if classification.exit_kind == SeedExitKind::Conditional
-        && classification.dynamic_len_bucket == SeedDynamicLenBucket::Max
-    {
-        buckets.push(Bucket::StressDynamicConditional);
-    }
-    if classification.storage_slots == 3 && classification.log_topics >= 2 {
-        buckets.push(Bucket::StressStorageLogsCall);
+        buckets.push(Bucket::CreateAndExternalCode);
     }
 
     buckets
@@ -531,48 +520,40 @@ fn bucket_counts(selected: &[SelectedSeed]) -> BTreeMap<Bucket, usize> {
 fn bucket_name(bucket: Bucket) -> &'static str {
     match bucket {
         Bucket::RawFallback => "raw_fallback",
-        Bucket::SelectorDispatch1 => "dispatch1",
-        Bucket::SelectorDispatch4 => "dispatch4",
-        Bucket::SelectedFirstEntry => "selected_first",
-        Bucket::SelectedLastEntry => "selected_last",
-        Bucket::ReturnWords => "return_words",
-        Bucket::ReturnBytes => "return_bytes",
-        Bucket::RevertWords => "revert_words",
-        Bucket::RevertBytes => "revert_bytes",
-        Bucket::ConditionalReturn => "conditional_return",
-        Bucket::ConditionalRevert => "conditional_revert",
-        Bucket::DynamicLenZero => "dynamic_zero",
-        Bucket::DynamicLenOne => "dynamic_one",
-        Bucket::DynamicLenWordMinusOne => "dynamic_31",
-        Bucket::DynamicLenWord => "dynamic_32",
-        Bucket::DynamicLenWordPlusOne => "dynamic_33",
-        Bucket::DynamicLenMax => "dynamic_max",
-        Bucket::Log0 => "log0",
+        Bucket::SelectorDispatch => "dispatch",
+        Bucket::DispatchMax => "dispatch_max",
+        Bucket::MultiCall => "multi_call",
+        Bucket::MaxCallCount => "max_call_count",
+        Bucket::MultiEntryTouched => "multi_entry",
+        Bucket::ShortCalldata => "short_calldata",
+        Bucket::UnalignedCalldata => "unaligned_calldata",
+        Bucket::FullWidthWord => "full_width_word",
+        Bucket::Arithmetic => "arithmetic",
+        Bucket::SignedArithmetic => "signed_arithmetic",
+        Bucket::MemoryWidth => "memory_width",
+        Bucket::MemoryCopy => "memory_copy",
+        Bucket::CalldataCopy => "calldata_copy",
+        Bucket::Storage => "storage",
+        Bucket::RepeatedStorageSlot => "repeated_storage",
+        Bucket::TransientStorage => "transient_storage",
+        Bucket::ExternalCode => "external_code",
+        Bucket::Call => "call",
+        Bucket::DelegateCall => "delegate_call",
+        Bucket::Returndata => "returndata",
+        Bucket::Create => "create",
+        Bucket::Create2 => "create2",
+        Bucket::Log => "log",
         Bucket::Log4 => "log4",
-        Bucket::LogDataZero => "log_data_zero",
-        Bucket::LogDataMax => "log_data_max",
-        Bucket::StorageOne => "storage_one",
-        Bucket::StorageMax => "storage_max",
-        Bucket::LoopZero => "loop_zero",
-        Bucket::LoopMax => "loop_max",
-        Bucket::MemoryOne => "memory_one",
-        Bucket::MemoryMax => "memory_max",
-        Bucket::EchoCall => "call_echo",
-        Bucket::EchoStaticCall => "call_static_echo",
-        Bucket::RevertCall => "call_revert",
-        Bucket::CalldataZero => "calldata_zero",
-        Bucket::CalldataOne => "calldata_one",
-        Bucket::CalldataU64Max => "calldata_u64_max",
-        Bucket::CalldataAlternating => "calldata_alternating",
-        Bucket::ShiftZero => "shift_zero",
-        Bucket::ShiftMax => "shift_max",
-        Bucket::ByteIndexZero => "byte_zero",
-        Bucket::ByteIndexLast => "byte_last",
-        Bucket::StressDispatchLogs => "stress_dispatch_logs",
-        Bucket::StressDispatchStorage => "stress_dispatch_storage",
-        Bucket::StressLoopCall => "stress_loop_call",
-        Bucket::StressDynamicConditional => "stress_dynamic_conditional",
-        Bucket::StressStorageLogsCall => "stress_storage_logs_call",
+        Bucket::Branch => "branch",
+        Bucket::Loop => "loop",
+        Bucket::ReturnExit => "return_exit",
+        Bucket::RevertExit => "revert_exit",
+        Bucket::ConditionalExit => "conditional_exit",
+        Bucket::StopExit => "stop_exit",
+        Bucket::InvalidExit => "invalid_exit",
+        Bucket::StorageAndMultiCall => "storage_multi_call",
+        Bucket::CallAndReturndata => "call_returndata",
+        Bucket::CreateAndExternalCode => "create_external_code",
         Bucket::ComboExtra => "combo",
     }
 }
@@ -586,7 +567,8 @@ fn fixed_candidates() -> Vec<Vec<u8>> {
         candidates.push(vec![0xff; size]);
         candidates.push(vec![0x55; size]);
         candidates.push(vec![0xaa; size]);
-        candidates.push(repeated_pattern(size, b"RappieSolSeed"));
+        candidates.push(repeated_pattern(size, b"RappieSolTraceSeed"));
+        candidates.push(repeated_pattern(size, b"DispatchStorageCallsCreateLogs"));
         candidates.push((0..size).map(|index| index as u8).collect());
         candidates.push((0..size).map(|index| 255u8.wrapping_sub(index as u8)).collect());
     }
@@ -602,11 +584,12 @@ fn candidate_bytes(index: usize, fixed: &[Vec<u8>]) -> Vec<u8> {
     let random_index = index - fixed.len();
     let mut rng = XorShift64::new(0x9e37_79b9_7f4a_7c15 ^ random_index as u64);
     let size = SIZES[(rng.next_u64() as usize) % SIZES.len()];
-    match rng.next_u64() % 4 {
+    match rng.next_u64() % 5 {
         0 => random_bytes(size, &mut rng),
         1 => word_pattern_bytes(size, &mut rng),
         2 => sparse_edge_bytes(size, &mut rng),
-        _ => mixed_pattern_bytes(size, &mut rng),
+        3 => mixed_pattern_bytes(size, &mut rng),
+        _ => structured_pressure_bytes(size, &mut rng),
     }
 }
 
@@ -615,8 +598,16 @@ fn random_bytes(size: usize, rng: &mut XorShift64) -> Vec<u8> {
 }
 
 fn word_pattern_bytes(size: usize, rng: &mut XorShift64) -> Vec<u8> {
-    const WORDS: [u64; 6] =
-        [0, 1, u64::MAX, 0x5555_5555_5555_5555, 0xaaaa_aaaa_aaaa_aaaa, 0x8000_0000_0000_0000];
+    const WORDS: [u64; 8] = [
+        0,
+        1,
+        31,
+        32,
+        u64::MAX,
+        0x5555_5555_5555_5555,
+        0xaaaa_aaaa_aaaa_aaaa,
+        0x8000_0000_0000_0000,
+    ];
 
     let mut bytes = Vec::with_capacity(size);
     while bytes.len() < size {
@@ -630,15 +621,24 @@ fn word_pattern_bytes(size: usize, rng: &mut XorShift64) -> Vec<u8> {
 fn sparse_edge_bytes(size: usize, rng: &mut XorShift64) -> Vec<u8> {
     let mut bytes = vec![0; size];
     for byte in &mut bytes {
-        let roll = rng.next_u64() % 16;
+        let roll = rng.next_u64() % 18;
         *byte = match roll {
             0 => 0,
             1 => 1,
-            2 => 31,
-            3 => 32,
-            4 => 33,
-            5 => 160,
-            6 => 255,
+            2 => 2,
+            3 => 3,
+            4 => 4,
+            5 => 5,
+            6 => 6,
+            7 => 31,
+            8 => 32,
+            9 => 33,
+            10 => 64,
+            11 => 96,
+            12 => 128,
+            13 => 160,
+            14 => 192,
+            15 => 255,
             _ => rng.next_u64() as u8,
         };
     }
@@ -646,12 +646,28 @@ fn sparse_edge_bytes(size: usize, rng: &mut XorShift64) -> Vec<u8> {
 }
 
 fn mixed_pattern_bytes(size: usize, rng: &mut XorShift64) -> Vec<u8> {
-    let pattern = match rng.next_u64() % 3 {
+    let pattern = match rng.next_u64() % 4 {
         0 => b"SelectorDispatchLogsStorageCalls".as_slice(),
         1 => b"ReturnRevertDynamicLoopMemory".as_slice(),
-        _ => b"\x00\x01\x1f\x20\x21\xa5\x5a\xff".as_slice(),
+        2 => b"ExternalCodeCreateTransientReturndata".as_slice(),
+        _ => b"\x00\x01\x04\x06\x08\x0a\x1f\x20\x21\x40\x60\x80\xc0\xff".as_slice(),
     };
     repeated_pattern(size, pattern)
+}
+
+fn structured_pressure_bytes(size: usize, rng: &mut XorShift64) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(size);
+    let mut selector_bias = 0u8;
+    while bytes.len() < size {
+        bytes.push((rng.next_u64() as u8) % 6);
+        bytes.push(selector_bias);
+        bytes.push(4);
+        bytes.push(10);
+        bytes.extend_from_slice(&(rng.next_u64()).to_le_bytes());
+        selector_bias = selector_bias.wrapping_add(1);
+    }
+    bytes.truncate(size);
+    bytes
 }
 
 fn repeated_pattern(size: usize, pattern: &[u8]) -> Vec<u8> {

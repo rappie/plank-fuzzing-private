@@ -15,8 +15,12 @@ impl FuzzCase {
         self.generated.solidity_source()
     }
 
-    pub fn calldata(&self) -> Vec<u8> {
-        self.generated.calldata()
+    pub fn calldatas(&self) -> Vec<Vec<u8>> {
+        self.generated.calldatas()
+    }
+
+    pub fn call_count(&self) -> usize {
+        self.generated.call_count()
     }
 
     pub fn seed_classification(&self) -> SeedClassification {
@@ -37,24 +41,25 @@ mod tests {
     use std::{fs, path::Path};
 
     #[test]
-    fn fuzz_case_exposes_sources_and_matching_calldata() {
+    fn fuzz_case_exposes_sources_and_call_sequence() {
         let bytes = vec![11; 4096];
         let mut u = Unstructured::new(&bytes);
         let case = FuzzCase::arbitrary(&mut u).expect("case should decode");
 
         assert!(case.plank_source().contains("init {"));
-        assert!(case.plank_source().contains("@evm_sstore"));
         assert!(
             case.plank_source().contains("@evm_return")
                 || case.plank_source().contains("@evm_revert")
+                || case.plank_source().contains("@evm_stop")
+                || case.plank_source().contains("@evm_invalid")
         );
         assert!(case.solidity_source().contains("contract C {"));
-        assert!(case.solidity_source().contains("sstore("));
+        assert!(case.solidity_source().contains("assembly"));
 
-        let calldata = case.calldata();
-        assert!(
-            calldata.len() % 32 == 0 || (calldata.len() >= 4 && (calldata.len() - 4) % 32 == 0)
-        );
+        let calldatas = case.calldatas();
+        assert_eq!(case.call_count(), calldatas.len());
+        assert!(!calldatas.is_empty());
+        assert!(calldatas.iter().all(|calldata| calldata.len() <= 196));
     }
 
     #[test]
@@ -77,9 +82,35 @@ mod tests {
     #[ignore = "requires RAPPIE_SOL_SOLX, SOLX_PATH, or solx on PATH"]
     fn committed_seeds_compare_plank_solidity() {
         for (name, case) in committed_seed_cases() {
-            crate::compare_plank_solidity(&case)
-                .unwrap_or_else(|err| panic!("{name} did not compare successfully: {err}"));
+            crate::compare_plank_solidity(&case).unwrap_or_else(|err| {
+                panic!(
+                    "{name} did not compare successfully: {err}\n\ncalldatas:\n{}\n\nPlank source:\n{}\nSolidity source:\n{}",
+                    hex_encode_all(&case.calldatas()),
+                    case.plank_source(),
+                    case.solidity_source()
+                )
+            });
         }
+    }
+
+    fn hex_encode_all(calldatas: &[Vec<u8>]) -> String {
+        calldatas
+            .iter()
+            .enumerate()
+            .map(|(index, calldata)| format!("call {index}: 0x{}", hex_encode(calldata)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn hex_encode(bytes: &[u8]) -> String {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+
+        let mut encoded = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            encoded.push(DIGITS[(byte >> 4) as usize] as char);
+            encoded.push(DIGITS[(byte & 0x0f) as usize] as char);
+        }
+        encoded
     }
 
     fn committed_seed_cases() -> Vec<(String, FuzzCase)> {

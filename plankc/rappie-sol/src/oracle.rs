@@ -1,7 +1,7 @@
 use crate::{
     FuzzCase,
     compiler::{plank::compile_plank_source, solx::compile_solidity_source},
-    evm::{EvmRunResult, run_bytecode},
+    evm::{EvmTrace, run_bytecode_sequence},
 };
 use alloy_primitives::hex;
 use plank_driver::BackendKind;
@@ -13,15 +13,16 @@ const PLANK_OPTIMIZATIONS: Option<&str> = None;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Execution {
     pub name: &'static str,
-    pub result: EvmRunResult,
+    pub trace: EvmTrace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MismatchReason {
-    Success,
-    Output,
-    Logs,
-    Storage,
+    CallCount,
+    CallSuccess { index: usize },
+    CallOutput { index: usize },
+    CallLogs { index: usize },
+    FinalStorage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,39 +31,39 @@ pub enum HarnessError {
     SolidityCompile { diagnostics: String },
     PlankExecute { message: String },
     SolidityExecute { message: String },
-    Mismatch { plank: Execution, solidity: Execution, reason: MismatchReason },
+    Mismatch { plank: Box<Execution>, solidity: Box<Execution>, reason: MismatchReason },
 }
 
 pub fn compare_plank_solidity(case: &FuzzCase) -> Result<(), HarnessError> {
     let plank_source = case.plank_source();
     let solidity_source = case.solidity_source();
-    let calldata = case.calldata();
+    let calldatas = case.calldatas();
 
-    compare_sources(&plank_source, &solidity_source, &calldata)
+    compare_sources(&plank_source, &solidity_source, &calldatas)
 }
 
 pub fn execute_plank_solidity(case: &FuzzCase) -> Result<(Execution, Execution), HarnessError> {
     let plank_source = case.plank_source();
     let solidity_source = case.solidity_source();
-    let calldata = case.calldata();
+    let calldatas = case.calldatas();
 
-    execute_sources(&plank_source, &solidity_source, &calldata)
+    execute_sources(&plank_source, &solidity_source, &calldatas)
 }
 
 pub fn compare_sources(
     plank_source: &str,
     solidity_source: &str,
-    calldata: &[u8],
+    calldatas: &[Vec<u8>],
 ) -> Result<(), HarnessError> {
-    let (plank, solidity) = execute_sources(plank_source, solidity_source, calldata)?;
+    let (plank, solidity) = execute_sources(plank_source, solidity_source, calldatas)?;
 
-    compare_results(plank, solidity)
+    compare_traces(plank, solidity)
 }
 
 fn execute_sources(
     plank_source: &str,
     solidity_source: &str,
-    calldata: &[u8],
+    calldatas: &[Vec<u8>],
 ) -> Result<(Execution, Execution), HarnessError> {
     let plank_bytecode = compile_plank_source(plank_source, PLANK_BACKEND, PLANK_OPTIMIZATIONS)
         .map_err(|err| HarnessError::PlankCompile { diagnostics: err.diagnostics().to_string() })?;
@@ -71,12 +72,12 @@ fn execute_sources(
 
     let plank = Execution {
         name: "plank",
-        result: run_bytecode(&plank_bytecode, calldata)
+        trace: run_bytecode_sequence(&plank_bytecode, calldatas)
             .map_err(|err| HarnessError::PlankExecute { message: err.to_string() })?,
     };
     let solidity = Execution {
         name: "solidity",
-        result: run_bytecode(&solidity_bytecode, calldata)
+        trace: run_bytecode_sequence(&solidity_bytecode, calldatas)
             .map_err(|err| HarnessError::SolidityExecute { message: err.to_string() })?,
     };
 
@@ -96,52 +97,103 @@ impl fmt::Display for HarnessError {
             Self::SolidityExecute { message } => {
                 write!(f, "Solidity execution failed:\n{message}")
             }
-            Self::Mismatch { plank, solidity, reason } => match reason {
-                MismatchReason::Success => write!(
-                    f,
-                    "success mismatch:\n{}={}\n{}={}",
-                    plank.name, plank.result.success, solidity.name, solidity.result.success
-                ),
-                MismatchReason::Output => write!(
-                    f,
-                    "output mismatch:\n{}: 0x{}\n{}: 0x{}",
-                    plank.name,
-                    hex::encode(&plank.result.output),
-                    solidity.name,
-                    hex::encode(&solidity.result.output)
-                ),
-                MismatchReason::Logs => write!(
-                    f,
-                    "log mismatch:\n{}: {:?}\n{}: {:?}",
-                    plank.name, plank.result.logs, solidity.name, solidity.result.logs
-                ),
-                MismatchReason::Storage => write!(
-                    f,
-                    "storage mismatch:\n{}: {:?}\n{}: {:?}",
-                    plank.name, plank.result.storage, solidity.name, solidity.result.storage
-                ),
-            },
+            Self::Mismatch { plank, solidity, reason } => {
+                render_mismatch(f, plank, solidity, *reason)
+            }
         }
     }
 }
 
 impl std::error::Error for HarnessError {}
 
-fn compare_results(plank: Execution, solidity: Execution) -> Result<(), HarnessError> {
-    if plank.result.success != solidity.result.success {
-        return Err(HarnessError::Mismatch { plank, solidity, reason: MismatchReason::Success });
+fn render_mismatch(
+    f: &mut fmt::Formatter<'_>,
+    plank: &Execution,
+    solidity: &Execution,
+    reason: MismatchReason,
+) -> fmt::Result {
+    match reason {
+        MismatchReason::CallCount => write!(
+            f,
+            "call count mismatch:\n{}={}\n{}={}",
+            plank.name,
+            plank.trace.calls.len(),
+            solidity.name,
+            solidity.trace.calls.len()
+        ),
+        MismatchReason::CallSuccess { index } => write!(
+            f,
+            "call {index} success mismatch:\n{}={}\n{}={}",
+            plank.name,
+            plank.trace.calls[index].success,
+            solidity.name,
+            solidity.trace.calls[index].success
+        ),
+        MismatchReason::CallOutput { index } => write!(
+            f,
+            "call {index} output mismatch:\n{}: 0x{}\n{}: 0x{}",
+            plank.name,
+            hex::encode(&plank.trace.calls[index].output),
+            solidity.name,
+            hex::encode(&solidity.trace.calls[index].output)
+        ),
+        MismatchReason::CallLogs { index } => write!(
+            f,
+            "call {index} log mismatch:\n{}: {:?}\n{}: {:?}",
+            plank.name,
+            plank.trace.calls[index].logs,
+            solidity.name,
+            solidity.trace.calls[index].logs
+        ),
+        MismatchReason::FinalStorage => write!(
+            f,
+            "final storage mismatch:\n{}: {:?}\n{}: {:?}",
+            plank.name, plank.trace.final_storage, solidity.name, solidity.trace.final_storage
+        ),
+    }
+}
+
+fn compare_traces(plank: Execution, solidity: Execution) -> Result<(), HarnessError> {
+    if plank.trace.calls.len() != solidity.trace.calls.len() {
+        return Err(HarnessError::Mismatch {
+            plank: Box::new(plank),
+            solidity: Box::new(solidity),
+            reason: MismatchReason::CallCount,
+        });
     }
 
-    if plank.result.output != solidity.result.output {
-        return Err(HarnessError::Mismatch { plank, solidity, reason: MismatchReason::Output });
+    for index in 0..plank.trace.calls.len() {
+        if plank.trace.calls[index].success != solidity.trace.calls[index].success {
+            return Err(HarnessError::Mismatch {
+                plank: Box::new(plank),
+                solidity: Box::new(solidity),
+                reason: MismatchReason::CallSuccess { index },
+            });
+        }
+
+        if plank.trace.calls[index].output != solidity.trace.calls[index].output {
+            return Err(HarnessError::Mismatch {
+                plank: Box::new(plank),
+                solidity: Box::new(solidity),
+                reason: MismatchReason::CallOutput { index },
+            });
+        }
+
+        if plank.trace.calls[index].logs != solidity.trace.calls[index].logs {
+            return Err(HarnessError::Mismatch {
+                plank: Box::new(plank),
+                solidity: Box::new(solidity),
+                reason: MismatchReason::CallLogs { index },
+            });
+        }
     }
 
-    if plank.result.logs != solidity.result.logs {
-        return Err(HarnessError::Mismatch { plank, solidity, reason: MismatchReason::Logs });
-    }
-
-    if plank.result.storage != solidity.result.storage {
-        return Err(HarnessError::Mismatch { plank, solidity, reason: MismatchReason::Storage });
+    if plank.trace.final_storage != solidity.trace.final_storage {
+        return Err(HarnessError::Mismatch {
+            plank: Box::new(plank),
+            solidity: Box::new(solidity),
+            reason: MismatchReason::FinalStorage,
+        });
     }
 
     Ok(())
@@ -149,70 +201,87 @@ fn compare_results(plank: Execution, solidity: Execution) -> Result<(), HarnessE
 
 #[cfg(test)]
 mod tests {
-    use super::{HarnessError, MismatchReason, compare_results};
-    use crate::{
-        EvmRunResult,
-        evm::{ObservedLog, ObservedStorageSlot},
-        oracle::Execution,
-    };
+    use super::{Execution, HarnessError, MismatchReason, compare_traces};
+    use crate::evm::{EvmCallResult, EvmTrace, ObservedLog, ObservedStorageSlot};
 
     #[test]
-    fn compare_results_accepts_matching_results() {
-        let plank = Execution { name: "plank", result: result(true, vec![1]) };
-        let solidity = Execution { name: "solidity", result: result(true, vec![1]) };
+    fn compare_traces_accepts_matching_results() {
+        let plank = Execution { name: "plank", trace: trace(vec![call(true, vec![1])]) };
+        let solidity = Execution { name: "solidity", trace: trace(vec![call(true, vec![1])]) };
 
-        compare_results(plank, solidity).expect("matching results should pass");
+        compare_traces(plank, solidity).expect("matching traces should pass");
     }
 
     #[test]
-    fn compare_results_rejects_success_mismatch() {
-        let plank = Execution { name: "plank", result: result(true, vec![]) };
-        let solidity = Execution { name: "solidity", result: result(false, vec![]) };
+    fn compare_traces_rejects_call_count_mismatch() {
+        let plank = Execution { name: "plank", trace: trace(vec![call(true, vec![])]) };
+        let solidity = Execution { name: "solidity", trace: trace(vec![]) };
 
         assert!(matches!(
-            compare_results(plank, solidity),
-            Err(HarnessError::Mismatch { reason: MismatchReason::Success, .. })
+            compare_traces(plank, solidity),
+            Err(HarnessError::Mismatch { reason: MismatchReason::CallCount, .. })
         ));
     }
 
     #[test]
-    fn compare_results_rejects_output_mismatch() {
-        let plank = Execution { name: "plank", result: result(true, vec![1]) };
-        let solidity = Execution { name: "solidity", result: result(true, vec![2]) };
+    fn compare_traces_rejects_indexed_success_mismatch() {
+        let plank = Execution {
+            name: "plank",
+            trace: trace(vec![call(true, vec![]), call(false, vec![])]),
+        };
+        let solidity = Execution {
+            name: "solidity",
+            trace: trace(vec![call(true, vec![]), call(true, vec![])]),
+        };
 
         assert!(matches!(
-            compare_results(plank, solidity),
-            Err(HarnessError::Mismatch { reason: MismatchReason::Output, .. })
+            compare_traces(plank, solidity),
+            Err(HarnessError::Mismatch { reason: MismatchReason::CallSuccess { index: 1 }, .. })
         ));
     }
 
     #[test]
-    fn compare_results_rejects_log_mismatch() {
-        let mut left = result(true, vec![1]);
+    fn compare_traces_rejects_indexed_output_mismatch() {
+        let plank = Execution { name: "plank", trace: trace(vec![call(true, vec![1])]) };
+        let solidity = Execution { name: "solidity", trace: trace(vec![call(true, vec![2])]) };
+
+        assert!(matches!(
+            compare_traces(plank, solidity),
+            Err(HarnessError::Mismatch { reason: MismatchReason::CallOutput { index: 0 }, .. })
+        ));
+    }
+
+    #[test]
+    fn compare_traces_rejects_indexed_log_mismatch() {
+        let mut left = call(true, vec![]);
         left.logs.push(ObservedLog { address: [1; 20], topics: vec![[2; 32]], data: vec![3] });
-        let plank = Execution { name: "plank", result: left };
-        let solidity = Execution { name: "solidity", result: result(true, vec![1]) };
+        let plank = Execution { name: "plank", trace: trace(vec![left]) };
+        let solidity = Execution { name: "solidity", trace: trace(vec![call(true, vec![])]) };
 
         assert!(matches!(
-            compare_results(plank, solidity),
-            Err(HarnessError::Mismatch { reason: MismatchReason::Logs, .. })
+            compare_traces(plank, solidity),
+            Err(HarnessError::Mismatch { reason: MismatchReason::CallLogs { index: 0 }, .. })
         ));
     }
 
     #[test]
-    fn compare_results_rejects_storage_mismatch() {
-        let mut left = result(true, vec![1]);
-        left.storage.push(ObservedStorageSlot { slot: [1; 32], value: [2; 32] });
-        let plank = Execution { name: "plank", result: left };
-        let solidity = Execution { name: "solidity", result: result(true, vec![1]) };
+    fn compare_traces_rejects_final_storage_mismatch() {
+        let mut plank_trace = trace(vec![call(true, vec![])]);
+        plank_trace.final_storage.push(ObservedStorageSlot { slot: [1; 32], value: [2; 32] });
+        let plank = Execution { name: "plank", trace: plank_trace };
+        let solidity = Execution { name: "solidity", trace: trace(vec![call(true, vec![])]) };
 
         assert!(matches!(
-            compare_results(plank, solidity),
-            Err(HarnessError::Mismatch { reason: MismatchReason::Storage, .. })
+            compare_traces(plank, solidity),
+            Err(HarnessError::Mismatch { reason: MismatchReason::FinalStorage, .. })
         ));
     }
 
-    fn result(success: bool, output: Vec<u8>) -> EvmRunResult {
-        EvmRunResult { success, output, logs: Vec::new(), storage: Vec::new() }
+    fn trace(calls: Vec<EvmCallResult>) -> EvmTrace {
+        EvmTrace { calls, final_storage: Vec::new() }
+    }
+
+    fn call(success: bool, output: Vec<u8>) -> EvmCallResult {
+        EvmCallResult { success, output, logs: Vec::new() }
     }
 }

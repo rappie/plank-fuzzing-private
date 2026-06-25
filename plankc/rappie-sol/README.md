@@ -2,8 +2,8 @@
 
 This crate is a Plank/Solidity differential fuzzing harness. It decodes fuzzer
 bytes into one structured semantic program, renders equivalent Plank and
-Solidity/Yul sources, compiles both, executes both deployed bytecodes in `revm`,
-and compares the observable execution result.
+Solidity/Yul sources, compiles both, executes both deployed bytecodes in one
+shared `revm` state, and compares the observable trace.
 
 The Solidity side deliberately renders inline assembly inside a payable fallback
 contract so the generated operations use EVM semantics instead of high-level
@@ -46,7 +46,7 @@ corpus reach valid structured programs immediately.
 Regenerate the tracked seed corpus after generator changes:
 
 ```bash
-RAPPIE_SOL_SOLX=/path/to/solx cargo run --bin seedgen -- --target 48
+RAPPIE_SOL_SOLX=/path/to/solx cargo run --bin seedgen -- --target 96
 ```
 
 `seedgen` decodes deterministic candidate byte buffers, buckets the resulting
@@ -62,12 +62,13 @@ RAPPIE_SOL_SOLX=/path/to/solx cargo +nightly fuzz run plank_sol_program_diff \
 
 ## Oracle Scope
 
-The campaign compares:
+The campaign executes one to four calls against the same deployed bytecode and
+compares:
 
-- call success
-- raw return data
-- emitted logs
-- changed storage slots
+- per-call success
+- per-call raw return data
+- per-call emitted logs
+- final nonzero storage slots
 
 Balances and gas are not currently oracle outputs.
 
@@ -75,16 +76,23 @@ Balances and gas are not currently oracle outputs.
 
 The generator emits bounded programs that can run under `-fork=12` without shared
 compiler artifacts. Each case may use raw fallback calldata or selector dispatch
-with one to four entries. Executed entries combine:
+with one to six entries, then executes one to four selected calls. Executed
+entries combine:
 
-- multi-word returns and non-32-byte return/revert data
-- scratch memory stores, loads, overwrites, and `keccak256`
+- multi-word returns plus non-32-byte return/revert data
+- short, unaligned, and copied calldata
+- scratch memory stores/loads with widths from 1 to 32 bytes
+- memory copies and `keccak256`
 - bounded loops
-- storage stores and loads
+- persistent storage stores/loads, including repeated slots across calls
+- transient storage stores/loads
 - `log0` through `log4`
 - deterministic environment opcodes such as caller, callvalue, chainid,
-  timestamp, block number, and basefee
-- calls/staticcalls into deterministic helper contracts installed in the `revm`
-  database
-- signed comparisons and signed shifts
+  timestamp, block number, basefee, prevrandao, and gaslimit
+- calls, staticcalls, and delegatecalls into deterministic helper contracts
+  installed in the `revm` database
+- returndata size/copy/hash paths
+- create/create2 with fixed initcode
+- external code size/hash/copy for deterministic helper and empty accounts
+- signed arithmetic, signed comparisons, and signed shifts
 - edge constants such as zero, one, byte masks, signed min/max, and `u256::MAX`

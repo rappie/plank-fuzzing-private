@@ -1,8 +1,9 @@
 use alloy_primitives::{Address as AlloyAddress, B256, Bytes, U256};
 use revm::{
-    ExecuteEvm, MainBuilder, MainContext,
+    ExecuteCommitEvm, MainBuilder, MainContext,
     bytecode::Bytecode,
     context::{BlockEnv, Context, TxEnv},
+    context_interface::ContextTr,
     database::CacheDB,
     database_interface::EmptyDB,
     primitives::{Address, TxKind},
@@ -14,20 +15,32 @@ const TARGET: Address = Address::new([0xCC; 20]);
 const CALLER: Address = Address::new([0xCA; 20]);
 const HELPER_ECHO: Address = Address::new([0x11; 20]);
 const HELPER_REVERT: Address = Address::new([0x22; 20]);
+const HELPER_CODE: Address = Address::new([0x33; 20]);
+const EMPTY_ACCOUNT: Address = Address::new([0x44; 20]);
+const COINBASE: Address = Address::new([0xCB; 20]);
 
 const HELPER_ECHO_BYTECODE: &[u8] =
     &[0x60, 0x00, 0x35, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3];
 const HELPER_REVERT_BYTECODE: &[u8] = &[0x60, 0x2a, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xfd];
+const HELPER_CODE_BYTECODE: &[u8] = &[0x60, 0x99, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3];
 
+pub(crate) const CALLER_WORD: &str = "0xcacacacacacacacacacacacacacacacacacacaca";
 pub(crate) const HELPER_ECHO_WORD: &str = "0x1111111111111111111111111111111111111111";
 pub(crate) const HELPER_REVERT_WORD: &str = "0x2222222222222222222222222222222222222222";
+pub(crate) const HELPER_CODE_WORD: &str = "0x3333333333333333333333333333333333333333";
+pub(crate) const EMPTY_ACCOUNT_WORD: &str = "0x4444444444444444444444444444444444444444";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvmRunResult {
+pub struct EvmTrace {
+    pub calls: Vec<EvmCallResult>,
+    pub final_storage: Vec<ObservedStorageSlot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvmCallResult {
     pub success: bool,
     pub output: Vec<u8>,
     pub logs: Vec<ObservedLog>,
-    pub storage: Vec<ObservedStorageSlot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,68 +75,82 @@ impl fmt::Display for ExecutionError {
 
 impl std::error::Error for ExecutionError {}
 
-pub(crate) fn run_bytecode(
+pub(crate) fn run_bytecode_sequence(
     bytecode: &[u8],
-    calldata: &[u8],
-) -> Result<EvmRunResult, ExecutionError> {
+    calldatas: &[Vec<u8>],
+) -> Result<EvmTrace, ExecutionError> {
     let mut db = CacheDB::<EmptyDB>::default();
     db.insert_account_info(
         TARGET,
-        AccountInfo::from_bytecode(Bytecode::new_raw(Bytes::copy_from_slice(bytecode))),
+        account_with_balance_and_bytecode(
+            1_000_000_000_000_000_000u128,
+            Bytes::copy_from_slice(bytecode),
+        ),
     );
     db.insert_account_info(HELPER_ECHO, helper_account(HELPER_ECHO_BYTECODE));
     db.insert_account_info(HELPER_REVERT, helper_account(HELPER_REVERT_BYTECODE));
+    db.insert_account_info(HELPER_CODE, helper_account(HELPER_CODE_BYTECODE));
+    db.insert_account_info(EMPTY_ACCOUNT, account_with_balance(0));
+    db.insert_account_info(CALLER, account_with_balance(1_000_000_000_000_000_000u128));
 
-    let caller =
-        AccountInfo { balance: U256::from(1_000_000_000_000_000_000u128), ..Default::default() };
-    db.insert_account_info(CALLER, caller);
+    let mut block = BlockEnv {
+        number: U256::from(12_345),
+        timestamp: U256::from(1_700_000_001u64),
+        basefee: 7,
+        gas_limit: 1_000_000_000,
+        beneficiary: COINBASE,
+        difficulty: U256::from(0x1234u64),
+        prevrandao: Some(B256::new([0x5a; 32])),
+        ..Default::default()
+    };
+    block.set_blob_excess_gas_and_price(0, 1);
 
-    let tx = TxEnv::builder()
-        .caller(CALLER)
-        .kind(TxKind::Call(TARGET))
-        .data(Bytes::copy_from_slice(calldata))
-        .value(U256::from(7))
-        .gas_price(1_000)
-        .chain_id(Some(1))
-        .build()
-        .map_err(|err| ExecutionError::new(format!("invalid transaction environment: {err:?}")))?;
+    let mut evm = Context::mainnet().with_db(db).with_block(block).build_mainnet();
+    let mut calls = Vec::with_capacity(calldatas.len());
 
-    let mut block = BlockEnv::default();
-    block.number = U256::from(12_345);
-    block.timestamp = U256::from(1_700_000_001u64);
-    block.basefee = 7;
+    for (index, calldata) in calldatas.iter().enumerate() {
+        let tx = TxEnv::builder()
+            .caller(CALLER)
+            .kind(TxKind::Call(TARGET))
+            .nonce(index as u64)
+            .data(Bytes::copy_from_slice(calldata))
+            .value(U256::from(7))
+            .gas_price(1_000)
+            .gas_limit(16_000_000)
+            .chain_id(Some(1))
+            .build()
+            .map_err(|err| {
+                ExecutionError::new(format!("invalid transaction environment: {err:?}"))
+            })?;
 
-    let result = Context::mainnet()
-        .with_db(db)
-        .with_block(block)
-        .build_mainnet()
-        .transact(tx)
-        .map_err(|err| ExecutionError::new(format!("EVM transaction failed: {err:?}")))?;
+        let result = evm
+            .transact_commit(tx)
+            .map_err(|err| ExecutionError::new(format!("EVM transaction failed: {err:?}")))?;
+        calls.push(EvmCallResult {
+            success: result.is_success(),
+            output: result.output().map_or_else(Vec::new, |output| output.to_vec()),
+            logs: result.logs().iter().map(observed_log).collect(),
+        });
+    }
 
-    let success = result.result.is_success();
-    let output = result.result.output().map_or_else(Vec::new, |output| output.to_vec());
-    let logs = result.result.logs().iter().map(observed_log).collect();
-    let storage = result
-        .state
-        .get(&TARGET)
-        .map(|account| {
-            let mut slots = account
-                .changed_storage_slots()
-                .map(|(slot, value)| ObservedStorageSlot {
-                    slot: u256_bytes(*slot),
-                    value: u256_bytes(value.present_value()),
-                })
-                .collect::<Vec<_>>();
-            slots.sort_by(|left, right| left.slot.cmp(&right.slot));
-            slots
-        })
-        .unwrap_or_default();
+    Ok(EvmTrace { calls, final_storage: final_storage(evm.ctx.db_ref()) })
+}
 
-    Ok(EvmRunResult { success, output, logs, storage })
+fn account_with_balance(balance: u128) -> AccountInfo {
+    AccountInfo { balance: U256::from(balance), ..Default::default() }
+}
+
+fn account_with_balance_and_bytecode(balance: u128, bytecode: Bytes) -> AccountInfo {
+    let mut account = AccountInfo::from_bytecode(Bytecode::new_raw(bytecode));
+    account.balance = U256::from(balance);
+    account
 }
 
 fn helper_account(bytecode: &[u8]) -> AccountInfo {
-    AccountInfo::from_bytecode(Bytecode::new_raw(Bytes::copy_from_slice(bytecode)))
+    account_with_balance_and_bytecode(
+        1_000_000_000_000_000_000u128,
+        Bytes::copy_from_slice(bytecode),
+    )
 }
 
 fn observed_log(log: &alloy_primitives::Log) -> ObservedLog {
@@ -132,6 +159,27 @@ fn observed_log(log: &alloy_primitives::Log) -> ObservedLog {
         topics: log.data.topics().iter().map(b256_bytes).collect(),
         data: log.data.data.to_vec(),
     }
+}
+
+fn final_storage(db: &CacheDB<EmptyDB>) -> Vec<ObservedStorageSlot> {
+    let mut slots = db
+        .cache
+        .accounts
+        .get(&TARGET)
+        .map(|account| {
+            account
+                .storage
+                .iter()
+                .filter(|(_, value)| **value != U256::ZERO)
+                .map(|(slot, value)| ObservedStorageSlot {
+                    slot: u256_bytes(*slot),
+                    value: u256_bytes(*value),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    slots.sort_by_key(|slot| slot.slot);
+    slots
 }
 
 fn address_bytes(address: AlloyAddress) -> [u8; 20] {

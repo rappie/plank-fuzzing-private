@@ -7,14 +7,23 @@ fuzz_target!(|case: FuzzCase| {
     if let Err(err) = compare_plank_solidity(&case) {
         let plank_source = case.plank_source();
         let solidity_source = case.solidity_source();
-        let calldata = case.calldata();
+        let calldatas = case.calldatas();
 
         panic!(
-            "Plank/Solidity mismatch:\n{err}\n\ncalldata: 0x{}\n\ncase: {case:#?}\n\nPlank source:\n{plank_source}\n\nSolidity source:\n{solidity_source}",
-            hex_encode(&calldata)
+            "Plank/Solidity mismatch:\n{err}\n\ncalldatas:\n{}\n\ncase: {case:#?}\n\nPlank source:\n{plank_source}\n\nSolidity source:\n{solidity_source}",
+            hex_encode_all(&calldatas)
         );
     }
 });
+
+fn hex_encode_all(calldatas: &[Vec<u8>]) -> String {
+    calldatas
+        .iter()
+        .enumerate()
+        .map(|(index, calldata)| format!("call {index}: 0x{}", hex_encode(calldata)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 fn hex_encode(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
