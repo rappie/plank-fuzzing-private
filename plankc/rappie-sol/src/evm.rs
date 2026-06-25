@@ -2,11 +2,11 @@ use alloy_primitives::{Address as AlloyAddress, B256, Bytes, U256};
 use revm::{
     ExecuteCommitEvm, MainBuilder, MainContext,
     bytecode::Bytecode,
-    context::{BlockEnv, Context, TxEnv},
+    context::{BlockEnv, CfgEnv, Context, TxEnv},
     context_interface::ContextTr,
     database::CacheDB,
     database_interface::EmptyDB,
-    primitives::{Address, TxKind},
+    primitives::{Address, TxKind, hardfork::SpecId},
     state::AccountInfo,
 };
 use std::fmt;
@@ -105,7 +105,12 @@ pub(crate) fn run_bytecode_sequence(
     };
     block.set_blob_excess_gas_and_price(0, 1);
 
-    let mut evm = Context::mainnet().with_db(db).with_block(block).build_mainnet();
+    let mut cfg = CfgEnv::default();
+    cfg.set_spec_and_mainnet_gas_params(SpecId::OSAKA);
+    // Differential tests compare behavior, not bytecode-specific gas efficiency.
+    cfg.tx_gas_limit_cap = Some(u64::MAX);
+
+    let mut evm = Context::mainnet().with_db(db).with_block(block).with_cfg(cfg).build_mainnet();
     let mut calls = Vec::with_capacity(calldatas.len());
 
     for (index, calldata) in calldatas.iter().enumerate() {
@@ -116,7 +121,7 @@ pub(crate) fn run_bytecode_sequence(
             .data(Bytes::copy_from_slice(calldata))
             .value(U256::from(7))
             .gas_price(1_000)
-            .gas_limit(16_000_000)
+            .gas_limit(100_000_000)
             .chain_id(Some(1))
             .build()
             .map_err(|err| {
