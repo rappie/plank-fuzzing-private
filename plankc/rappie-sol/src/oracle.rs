@@ -20,6 +20,8 @@ pub struct Execution {
 pub enum MismatchReason {
     Success,
     Output,
+    Logs,
+    Storage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +92,16 @@ impl fmt::Display for HarnessError {
                     solidity.name,
                     hex::encode(&solidity.result.output)
                 ),
+                MismatchReason::Logs => write!(
+                    f,
+                    "log mismatch:\n{}: {:?}\n{}: {:?}",
+                    plank.name, plank.result.logs, solidity.name, solidity.result.logs
+                ),
+                MismatchReason::Storage => write!(
+                    f,
+                    "storage mismatch:\n{}: {:?}\n{}: {:?}",
+                    plank.name, plank.result.storage, solidity.name, solidity.result.storage
+                ),
             },
         }
     }
@@ -106,30 +118,38 @@ fn compare_results(plank: Execution, solidity: Execution) -> Result<(), HarnessE
         return Err(HarnessError::Mismatch { plank, solidity, reason: MismatchReason::Output });
     }
 
+    if plank.result.logs != solidity.result.logs {
+        return Err(HarnessError::Mismatch { plank, solidity, reason: MismatchReason::Logs });
+    }
+
+    if plank.result.storage != solidity.result.storage {
+        return Err(HarnessError::Mismatch { plank, solidity, reason: MismatchReason::Storage });
+    }
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{HarnessError, MismatchReason, compare_results};
-    use crate::{EvmRunResult, oracle::Execution};
+    use crate::{
+        EvmRunResult,
+        evm::{ObservedLog, ObservedStorageSlot},
+        oracle::Execution,
+    };
 
     #[test]
     fn compare_results_accepts_matching_results() {
-        let plank =
-            Execution { name: "plank", result: EvmRunResult { success: true, output: vec![1] } };
-        let solidity =
-            Execution { name: "solidity", result: EvmRunResult { success: true, output: vec![1] } };
+        let plank = Execution { name: "plank", result: result(true, vec![1]) };
+        let solidity = Execution { name: "solidity", result: result(true, vec![1]) };
 
         compare_results(plank, solidity).expect("matching results should pass");
     }
 
     #[test]
     fn compare_results_rejects_success_mismatch() {
-        let plank =
-            Execution { name: "plank", result: EvmRunResult { success: true, output: vec![] } };
-        let solidity =
-            Execution { name: "solidity", result: EvmRunResult { success: false, output: vec![] } };
+        let plank = Execution { name: "plank", result: result(true, vec![]) };
+        let solidity = Execution { name: "solidity", result: result(false, vec![]) };
 
         assert!(matches!(
             compare_results(plank, solidity),
@@ -139,14 +159,42 @@ mod tests {
 
     #[test]
     fn compare_results_rejects_output_mismatch() {
-        let plank =
-            Execution { name: "plank", result: EvmRunResult { success: true, output: vec![1] } };
-        let solidity =
-            Execution { name: "solidity", result: EvmRunResult { success: true, output: vec![2] } };
+        let plank = Execution { name: "plank", result: result(true, vec![1]) };
+        let solidity = Execution { name: "solidity", result: result(true, vec![2]) };
 
         assert!(matches!(
             compare_results(plank, solidity),
             Err(HarnessError::Mismatch { reason: MismatchReason::Output, .. })
         ));
+    }
+
+    #[test]
+    fn compare_results_rejects_log_mismatch() {
+        let mut left = result(true, vec![1]);
+        left.logs.push(ObservedLog { address: [1; 20], topics: vec![[2; 32]], data: vec![3] });
+        let plank = Execution { name: "plank", result: left };
+        let solidity = Execution { name: "solidity", result: result(true, vec![1]) };
+
+        assert!(matches!(
+            compare_results(plank, solidity),
+            Err(HarnessError::Mismatch { reason: MismatchReason::Logs, .. })
+        ));
+    }
+
+    #[test]
+    fn compare_results_rejects_storage_mismatch() {
+        let mut left = result(true, vec![1]);
+        left.storage.push(ObservedStorageSlot { slot: [1; 32], value: [2; 32] });
+        let plank = Execution { name: "plank", result: left };
+        let solidity = Execution { name: "solidity", result: result(true, vec![1]) };
+
+        assert!(matches!(
+            compare_results(plank, solidity),
+            Err(HarnessError::Mismatch { reason: MismatchReason::Storage, .. })
+        ));
+    }
+
+    fn result(success: bool, output: Vec<u8>) -> EvmRunResult {
+        EvmRunResult { success, output, logs: Vec::new(), storage: Vec::new() }
     }
 }
