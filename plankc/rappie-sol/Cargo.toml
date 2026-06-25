@@ -1,0 +1,17 @@
+[package]
+name = "rappie-sol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+alloy-primitives.workspace = true
+arbitrary = "1"
+plank-driver.workspace = true
+plank-evm.workspace = true
+plank-source.workspace = true
+revm = "36"
+serde_json = "1"

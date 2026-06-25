@@ -1,0 +1,22 @@
+[package]
+name = "rappie-sol-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rappie-sol = { path = ".." }
+
+[[bin]]
+name = "plank_sol_program_diff"
+path = "fuzz_targets/plank_sol_program_diff.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
