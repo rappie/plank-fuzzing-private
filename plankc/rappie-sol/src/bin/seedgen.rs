@@ -17,7 +17,7 @@ use std::{
     process::ExitCode,
 };
 
-const DEFAULT_TARGET: usize = 256;
+const DEFAULT_TARGET: usize = 320;
 const DEFAULT_CANDIDATE_LIMIT: usize = 300_000;
 const DEFAULT_OUTPUT_DIR: &str = "fuzz/seeds/plank_sol_program_diff";
 const SIZES: [usize; 7] = [128, 256, 512, 1024, 2048, 4096, 8192];
@@ -87,6 +87,19 @@ const ALL_BUCKETS: &[Bucket] = &[
     Bucket::NestedCompound,
     Bucket::RuntimeUninit,
     Bucket::DataOffset,
+    Bucket::GenericInferredParam,
+    Bucket::ComptimeValueParam,
+    Bucket::ComptimeCompoundParam,
+    Bucket::FunctionValuedComptime,
+    Bucket::CBytesEdgeShapes,
+    Bucket::DataOffsetDedup,
+    Bucket::DataOffsetConcat,
+    Bucket::AnonymousTypeIdentity,
+    Bucket::CrossFileTypeIdentity,
+    Bucket::EvalBranchQuota,
+    Bucket::EmptyCompound,
+    Bucket::ComptimeOnlyCompound,
+    Bucket::RuntimeOnlyCompound,
     Bucket::StdRegistered,
 ];
 
@@ -348,6 +361,19 @@ impl From<SeedClassification> for ComboKey {
             classification.has_nested_compound,
             classification.has_runtime_uninit,
             classification.has_data_offset,
+            classification.has_generic_inferred_param,
+            classification.has_comptime_value_param,
+            classification.has_comptime_compound_param,
+            classification.has_function_valued_comptime,
+            classification.has_cbytes_edge_shapes,
+            classification.has_data_offset_dedup,
+            classification.has_data_offset_concat,
+            classification.has_anonymous_type_identity,
+            classification.has_cross_file_type_identity,
+            classification.has_eval_branch_quota,
+            classification.has_empty_compound,
+            classification.has_comptime_only_compound,
+            classification.has_runtime_only_compound,
             classification.has_std_registered,
         ];
 
@@ -434,6 +460,19 @@ enum Bucket {
     NestedCompound,
     RuntimeUninit,
     DataOffset,
+    GenericInferredParam,
+    ComptimeValueParam,
+    ComptimeCompoundParam,
+    FunctionValuedComptime,
+    CBytesEdgeShapes,
+    DataOffsetDedup,
+    DataOffsetConcat,
+    AnonymousTypeIdentity,
+    CrossFileTypeIdentity,
+    EvalBranchQuota,
+    EmptyCompound,
+    ComptimeOnlyCompound,
+    RuntimeOnlyCompound,
     StdRegistered,
     ComboExtra,
 }
@@ -652,6 +691,45 @@ fn buckets_for(classification: &SeedClassification) -> Vec<Bucket> {
     if classification.has_data_offset {
         buckets.push(Bucket::DataOffset);
     }
+    if classification.has_generic_inferred_param {
+        buckets.push(Bucket::GenericInferredParam);
+    }
+    if classification.has_comptime_value_param {
+        buckets.push(Bucket::ComptimeValueParam);
+    }
+    if classification.has_comptime_compound_param {
+        buckets.push(Bucket::ComptimeCompoundParam);
+    }
+    if classification.has_function_valued_comptime {
+        buckets.push(Bucket::FunctionValuedComptime);
+    }
+    if classification.has_cbytes_edge_shapes {
+        buckets.push(Bucket::CBytesEdgeShapes);
+    }
+    if classification.has_data_offset_dedup {
+        buckets.push(Bucket::DataOffsetDedup);
+    }
+    if classification.has_data_offset_concat {
+        buckets.push(Bucket::DataOffsetConcat);
+    }
+    if classification.has_anonymous_type_identity {
+        buckets.push(Bucket::AnonymousTypeIdentity);
+    }
+    if classification.has_cross_file_type_identity {
+        buckets.push(Bucket::CrossFileTypeIdentity);
+    }
+    if classification.has_eval_branch_quota {
+        buckets.push(Bucket::EvalBranchQuota);
+    }
+    if classification.has_empty_compound {
+        buckets.push(Bucket::EmptyCompound);
+    }
+    if classification.has_comptime_only_compound {
+        buckets.push(Bucket::ComptimeOnlyCompound);
+    }
+    if classification.has_runtime_only_compound {
+        buckets.push(Bucket::RuntimeOnlyCompound);
+    }
     if classification.has_std_registered {
         buckets.push(Bucket::StdRegistered);
     }
@@ -767,6 +845,19 @@ fn bucket_name(bucket: Bucket) -> &'static str {
         Bucket::NestedCompound => "nested_compound",
         Bucket::RuntimeUninit => "runtime_uninit",
         Bucket::DataOffset => "data_offset",
+        Bucket::GenericInferredParam => "generic_inferred_param",
+        Bucket::ComptimeValueParam => "comptime_value_param",
+        Bucket::ComptimeCompoundParam => "comptime_compound_param",
+        Bucket::FunctionValuedComptime => "function_valued_comptime",
+        Bucket::CBytesEdgeShapes => "cbytes_edge_shapes",
+        Bucket::DataOffsetDedup => "data_offset_dedup",
+        Bucket::DataOffsetConcat => "data_offset_concat",
+        Bucket::AnonymousTypeIdentity => "anonymous_type_identity",
+        Bucket::CrossFileTypeIdentity => "cross_file_type_identity",
+        Bucket::EvalBranchQuota => "eval_branch_quota",
+        Bucket::EmptyCompound => "empty_compound",
+        Bucket::ComptimeOnlyCompound => "comptime_only_compound",
+        Bucket::RuntimeOnlyCompound => "runtime_only_compound",
         Bucket::StdRegistered => "std_registered",
         Bucket::ComboExtra => "combo",
     }
@@ -975,6 +1066,19 @@ mod tests {
         classification.has_nested_compound = true;
         classification.has_runtime_uninit = true;
         classification.has_data_offset = true;
+        classification.has_generic_inferred_param = true;
+        classification.has_comptime_value_param = true;
+        classification.has_comptime_compound_param = true;
+        classification.has_function_valued_comptime = true;
+        classification.has_cbytes_edge_shapes = true;
+        classification.has_data_offset_dedup = true;
+        classification.has_data_offset_concat = true;
+        classification.has_anonymous_type_identity = true;
+        classification.has_cross_file_type_identity = true;
+        classification.has_eval_branch_quota = true;
+        classification.has_empty_compound = true;
+        classification.has_comptime_only_compound = true;
+        classification.has_runtime_only_compound = true;
 
         let buckets = buckets_for(&classification);
         for bucket in [
@@ -992,6 +1096,19 @@ mod tests {
             Bucket::NestedCompound,
             Bucket::RuntimeUninit,
             Bucket::DataOffset,
+            Bucket::GenericInferredParam,
+            Bucket::ComptimeValueParam,
+            Bucket::ComptimeCompoundParam,
+            Bucket::FunctionValuedComptime,
+            Bucket::CBytesEdgeShapes,
+            Bucket::DataOffsetDedup,
+            Bucket::DataOffsetConcat,
+            Bucket::AnonymousTypeIdentity,
+            Bucket::CrossFileTypeIdentity,
+            Bucket::EvalBranchQuota,
+            Bucket::EmptyCompound,
+            Bucket::ComptimeOnlyCompound,
+            Bucket::RuntimeOnlyCompound,
         ] {
             assert!(buckets.contains(&bucket), "missing bucket {bucket:?}");
         }
@@ -999,7 +1116,7 @@ mod tests {
 
     #[test]
     fn required_bucket_names_are_unique() {
-        assert_eq!(DEFAULT_TARGET, 256);
+        assert_eq!(DEFAULT_TARGET, 320);
 
         let mut names = BTreeSet::new();
         for bucket in ALL_BUCKETS {
@@ -1071,6 +1188,19 @@ mod tests {
             has_nested_compound: false,
             has_runtime_uninit: false,
             has_data_offset: false,
+            has_generic_inferred_param: false,
+            has_comptime_value_param: false,
+            has_comptime_compound_param: false,
+            has_function_valued_comptime: false,
+            has_cbytes_edge_shapes: false,
+            has_data_offset_dedup: false,
+            has_data_offset_concat: false,
+            has_anonymous_type_identity: false,
+            has_cross_file_type_identity: false,
+            has_eval_branch_quota: false,
+            has_empty_compound: false,
+            has_comptime_only_compound: false,
+            has_runtime_only_compound: false,
             has_std_registered: false,
         }
     }

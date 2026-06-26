@@ -106,6 +106,19 @@ pub struct SeedClassification {
     pub has_nested_compound: bool,
     pub has_runtime_uninit: bool,
     pub has_data_offset: bool,
+    pub has_generic_inferred_param: bool,
+    pub has_comptime_value_param: bool,
+    pub has_comptime_compound_param: bool,
+    pub has_function_valued_comptime: bool,
+    pub has_cbytes_edge_shapes: bool,
+    pub has_data_offset_dedup: bool,
+    pub has_data_offset_concat: bool,
+    pub has_anonymous_type_identity: bool,
+    pub has_cross_file_type_identity: bool,
+    pub has_eval_branch_quota: bool,
+    pub has_empty_compound: bool,
+    pub has_comptime_only_compound: bool,
+    pub has_runtime_only_compound: bool,
     pub has_std_registered: bool,
 }
 
@@ -173,6 +186,16 @@ impl GeneratedCase {
                 files.push(PlankSourceFile::new(
                     "gen/nested/boxes.plk",
                     self.frontend.render_nested_boxes_file(),
+                ));
+            }
+            if self.frontend.has_cross_file_type_identity {
+                files.push(PlankSourceFile::new(
+                    "gen/identity/a.plk",
+                    self.frontend.render_identity_a_file(),
+                ));
+                files.push(PlankSourceFile::new(
+                    "gen/identity/b.plk",
+                    self.frontend.render_identity_b_file(),
                 ));
             }
         }
@@ -320,6 +343,19 @@ impl GeneratedCase {
             has_nested_compound: false,
             has_runtime_uninit: false,
             has_data_offset: false,
+            has_generic_inferred_param: false,
+            has_comptime_value_param: false,
+            has_comptime_compound_param: false,
+            has_function_valued_comptime: false,
+            has_cbytes_edge_shapes: false,
+            has_data_offset_dedup: false,
+            has_data_offset_concat: false,
+            has_anonymous_type_identity: false,
+            has_cross_file_type_identity: false,
+            has_eval_branch_quota: false,
+            has_empty_compound: false,
+            has_comptime_only_compound: false,
+            has_runtime_only_compound: false,
             has_std_registered: false,
         };
 
@@ -413,11 +449,24 @@ struct FrontendPlan {
     has_nested_compound: bool,
     has_runtime_uninit: bool,
     has_data_offset: bool,
+    has_generic_inferred_param: bool,
+    has_comptime_value_param: bool,
+    has_comptime_compound_param: bool,
+    has_function_valued_comptime: bool,
+    has_cbytes_edge_shapes: bool,
+    has_data_offset_dedup: bool,
+    has_data_offset_concat: bool,
+    has_anonymous_type_identity: bool,
+    has_cross_file_type_identity: bool,
+    has_eval_branch_quota: bool,
+    has_empty_compound: bool,
+    has_comptime_only_compound: bool,
+    has_runtime_only_compound: bool,
 }
 
 impl FrontendPlan {
     fn arbitrary(u: &mut Unstructured<'_>) -> arbitrary::Result<Self> {
-        let mask = u.int_in_range(0u32..=0x01ff_ffff)?;
+        let mask = u.int_in_range(0u64..=0x3f_ffff_ffff)?;
         let mut plan = Self {
             has_struct: mask & (1 << 0) != 0,
             has_tuple: mask & (1 << 1) != 0,
@@ -444,6 +493,19 @@ impl FrontendPlan {
             has_nested_compound: mask & (1 << 22) != 0,
             has_runtime_uninit: mask & (1 << 23) != 0,
             has_data_offset: mask & (1 << 24) != 0,
+            has_generic_inferred_param: mask & (1 << 25) != 0,
+            has_comptime_value_param: mask & (1 << 26) != 0,
+            has_comptime_compound_param: mask & (1 << 27) != 0,
+            has_function_valued_comptime: mask & (1 << 28) != 0,
+            has_cbytes_edge_shapes: mask & (1 << 29) != 0,
+            has_data_offset_dedup: mask & (1 << 30) != 0,
+            has_data_offset_concat: mask & (1 << 31) != 0,
+            has_anonymous_type_identity: mask & (1 << 32) != 0,
+            has_cross_file_type_identity: mask & (1 << 33) != 0,
+            has_eval_branch_quota: mask & (1 << 34) != 0,
+            has_empty_compound: mask & (1 << 35) != 0,
+            has_comptime_only_compound: mask & (1 << 36) != 0,
+            has_runtime_only_compound: mask & (1 << 37) != 0,
         };
 
         if plan.has_import_single
@@ -489,18 +551,69 @@ impl FrontendPlan {
             plan.has_tuple = true;
             plan.has_helper_function = true;
         }
+        if plan.has_generic_inferred_param
+            || plan.has_comptime_value_param
+            || plan.has_comptime_compound_param
+            || plan.has_function_valued_comptime
+        {
+            plan.has_helper_function = true;
+        }
+        if plan.has_comptime_compound_param {
+            plan.has_struct = true;
+        }
         if plan.has_nested_compound {
             plan.has_struct = true;
             plan.has_tuple = true;
         }
-        if plan.has_runtime_uninit {
+        if plan.has_runtime_uninit || plan.has_runtime_only_compound {
             plan.has_struct = true;
+        }
+        if plan.has_runtime_only_compound {
+            plan.has_runtime_uninit = true;
+            plan.has_tuple = true;
         }
         if plan.has_cbytes_builtin {
             plan.has_hex_literal = true;
         }
+        if plan.has_cbytes_edge_shapes {
+            plan.has_cbytes_builtin = true;
+            plan.has_hex_literal = true;
+        }
+        if plan.has_data_offset_dedup || plan.has_data_offset_concat {
+            plan.has_data_offset = true;
+        }
         if plan.has_data_offset {
             plan.has_hex_literal = true;
+        }
+        if plan.has_data_offset_concat {
+            plan.has_cbytes_edge_shapes = true;
+            plan.has_cbytes_builtin = true;
+        }
+        if plan.has_anonymous_type_identity {
+            plan.has_comptime_control_flow = true;
+            plan.has_struct = true;
+        }
+        if plan.has_cross_file_type_identity {
+            plan.has_import = true;
+            plan.has_import_alias = true;
+            plan.has_deep_import = true;
+        }
+        if plan.has_eval_branch_quota {
+            plan.has_comptime_control_flow = true;
+        }
+        if plan.has_empty_compound {
+            plan.has_tuple = true;
+        }
+        if plan.has_comptime_only_compound {
+            plan.has_struct = true;
+        }
+        if plan.has_deep_import {
+            plan.has_import_alias = true;
+        }
+        if plan.has_import {
+            plan.has_struct = true;
+            plan.has_tuple = true;
+            plan.has_helper_function = true;
         }
 
         Ok(plan)
@@ -558,8 +671,33 @@ impl FrontendPlan {
             if self.has_nested_compound {
                 type_imports.extend(["NestedOuter", "NestedTuple"]);
             }
-            if self.has_runtime_uninit {
+            if self.has_runtime_uninit || self.has_runtime_only_compound {
                 type_imports.push("RuntimeScratch");
+            }
+            if self.has_cbytes_edge_shapes {
+                type_imports.extend([
+                    "CBYTES_EMPTY_OK",
+                    "CBYTES_NESTED_SLICE_OK",
+                    "CBYTES_LONG",
+                    "CBYTES_LONG_READ_WORD",
+                    "CBYTES_LONG_READ_OK",
+                    "CBYTES_CONCAT_SLICE_OK",
+                ]);
+            }
+            if self.has_anonymous_type_identity {
+                type_imports.extend(["FRONT_ANON_FIELD_COUNT", "FRONT_IDENTITY_FIELD_COUNT"]);
+            }
+            if self.has_eval_branch_quota {
+                type_imports.extend(["FRONT_QUOTA_LOOP_VALUE", "FRONT_QUOTA_RECURSION_VALUE"]);
+            }
+            if self.has_empty_compound {
+                type_imports.extend(["FRONT_EMPTY_FIELD_COUNT", "FRONT_NESTED_EMPTY_FIELD_COUNT"]);
+            }
+            if self.has_comptime_only_compound {
+                type_imports.extend(["FRONT_COMPTIME_ONLY_FIELD_COUNT", "FRONT_COMPTIME_ONLY_OK"]);
+            }
+            if self.has_runtime_only_compound {
+                type_imports.extend(["RuntimeTuple", "RuntimeNestedScratch"]);
             }
             writeln!(source, "import gen::types::{{{}}};", type_imports.join(", "))
                 .expect("writing to a string cannot fail");
@@ -581,6 +719,18 @@ impl FrontendPlan {
             if self.has_function_returns_compound && self.has_nested_compound {
                 helper_imports.push("make_front_outer");
             }
+            if self.has_generic_inferred_param {
+                helper_imports.push("front_same_type");
+            }
+            if self.has_comptime_value_param {
+                helper_imports.extend(["front_comptime_add", "front_bool_bonus"]);
+            }
+            if self.has_comptime_compound_param {
+                helper_imports.push("front_pair_bonus");
+            }
+            if self.has_function_valued_comptime {
+                helper_imports.extend(["front_select_fn", "front_apply_fn"]);
+            }
             writeln!(source, "import gen::helpers::{{{}}};", helper_imports.join(", "))
                 .expect("writing to a string cannot fail");
 
@@ -598,6 +748,14 @@ impl FrontendPlan {
             if self.has_deep_import {
                 source.push_str(
                     "import gen::nested::boxes::{DeepBoxU256 as ImportedBoxU256, nested_box_value as imported_box_value};\n",
+                );
+            }
+            if self.has_cross_file_type_identity {
+                source.push_str(
+                    "import gen::identity::a::{IdentityBoxU256 as IdentityBoxAU256, identity_box_value as identity_box_a_value};\n",
+                );
+                source.push_str(
+                    "import gen::identity::b::{IdentityBoxU256 as IdentityBoxBU256, identity_box_value as identity_box_b_value};\n",
                 );
             }
             source.push('\n');
@@ -662,6 +820,30 @@ impl FrontendPlan {
         source
     }
 
+    fn render_identity_a_file(&self) -> String {
+        self.render_identity_file("a")
+    }
+
+    fn render_identity_b_file(&self) -> String {
+        self.render_identity_file("b")
+    }
+
+    fn render_identity_file(&self, label: &str) -> String {
+        let mut source = String::new();
+        if self.has_comments {
+            writeln!(source, "// Generated cross-file identity definitions {label}.")
+                .expect("writing to a string cannot fail");
+        }
+        source.push_str(
+            "const IdentityBox = fn (comptime T: type) type {\n    struct T { value: T }\n};\n",
+        );
+        source.push_str("const IdentityBoxU256 = IdentityBox(u256);\n");
+        source.push_str(
+            "const identity_box_value = fn (item: IdentityBoxU256) u256 { return item.value; };\n",
+        );
+        source
+    }
+
     fn render_type_defs(&self, source: &mut String) {
         if self.needs_compound_defs() {
             source.push_str("const Pair = struct { a: u256, b: u256 };\n");
@@ -674,8 +856,21 @@ impl FrontendPlan {
                 source
                     .push_str("const NestedTuple = tuple { Pair, tuple { u256, u256 }, u256 };\n");
             }
-            if self.has_runtime_uninit {
+            if self.has_runtime_uninit || self.has_runtime_only_compound {
                 source.push_str("const RuntimeScratch = struct { ptr: memptr, len: u256 };\n");
+            }
+            if self.has_empty_compound {
+                source.push_str("const EmptyTuple = tuple {};\n");
+                source.push_str("const NestedEmptyTuple = tuple { tuple {}, Pair };\n");
+            }
+            if self.has_comptime_only_compound {
+                source.push_str("const ComptimeCarrier = struct { ty: type, n: u256 };\n");
+            }
+            if self.has_runtime_only_compound {
+                source.push_str("const RuntimeTuple = tuple { memptr, u256 };\n");
+                source.push_str(
+                    "const RuntimeNestedScratch = struct { item: RuntimeScratch, extra: u256 };\n",
+                );
             }
             source.push('\n');
         }
@@ -770,6 +965,64 @@ impl FrontendPlan {
             source.push_str("const CBYTES_SHA_OK = true;\n\n");
         }
 
+        if self.has_cbytes_edge_shapes {
+            source.push_str("const CBYTES_EMPTY_OK = @slice_cbytes(\"\", 0, 0) == \"\";\n");
+            source.push_str("const CBYTES_NESTED_SLICE_OK = @slice_cbytes(@slice_cbytes(\"hello\", 1, 4), 1, 2) == \"l\";\n");
+            source.push_str("const CBYTES_LONG = hex\"0000000000000000000000000000000000000000000000000000000000000000\" hex\"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20\" hex\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\";\n");
+            source
+                .push_str("const CBYTES_LONG_READ_WORD = @padded_read_cbytes(CBYTES_LONG, 33);\n");
+            source.push_str("const CBYTES_LONG_READ_OK = CBYTES_LONG_READ_WORD == 0x02030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20ff;\n");
+            source.push_str("const CBYTES_CONCAT_SLICE_OK = @concat_cbytes((@slice_cbytes(\"hello\", 1, 4), \"!\")) == \"ell!\";\n\n");
+        }
+
+        if self.has_anonymous_type_identity {
+            source.push_str("const front_identity_type = fn (comptime T: type) type { T };\n");
+            source.push_str("const FRONT_ANON_FIELD_COUNT = @field_count(struct { value: u256, flag: bool });\n");
+            source.push_str(
+                "const FRONT_IDENTITY_FIELD_COUNT = @field_count(front_identity_type(Pair));\n\n",
+            );
+        }
+
+        if self.has_eval_branch_quota {
+            source.push_str("const front_quota_fib = fn (n: u256) u256 {\n");
+            source.push_str("    if n < 2 {\n");
+            source.push_str("        return n;\n");
+            source.push_str("    }\n");
+            source.push_str("    return front_quota_fib(n -% 1) +% front_quota_fib(n -% 2);\n");
+            source.push_str("};\n");
+            source.push_str("const FRONT_QUOTA_LOOP_VALUE = comptime {\n");
+            source.push_str("    @set_eval_branch_quota(64);\n");
+            source.push_str("    let mut i = 0;\n");
+            source.push_str("    let mut value = 0;\n");
+            source.push_str("    while i < 8 {\n");
+            source.push_str("        value = value +% i;\n");
+            source.push_str("        i = i +% 1;\n");
+            source.push_str("    }\n");
+            source.push_str("    value\n");
+            source.push_str("};\n");
+            source.push_str("const FRONT_QUOTA_RECURSION_VALUE = comptime {\n");
+            source.push_str("    @set_eval_branch_quota(128);\n");
+            source.push_str("    front_quota_fib(5)\n");
+            source.push_str("};\n\n");
+        }
+
+        if self.has_empty_compound {
+            source.push_str("const FRONT_EMPTY_FIELD_COUNT = @field_count(EmptyTuple);\n");
+            source.push_str(
+                "const FRONT_NESTED_EMPTY_FIELD_COUNT = @field_count(NestedEmptyTuple);\n\n",
+            );
+        }
+
+        if self.has_comptime_only_compound {
+            source.push_str(
+                "const FRONT_COMPTIME_ONLY_FIELD_COUNT = @field_count(ComptimeCarrier);\n",
+            );
+            source.push_str("const FRONT_COMPTIME_ONLY_OK = comptime {\n");
+            source.push_str("    let carrier = ComptimeCarrier { ty: u256, n: 9 };\n");
+            source.push_str("    @field_type(ComptimeCarrier, 0) == type and carrier.n == 9\n");
+            source.push_str("};\n\n");
+        }
+
         if self.has_binary_literal {
             source.push_str("const FRONT_BINARY_LITERAL = 0b1010_0011;\n");
         } else if self.has_import {
@@ -857,6 +1110,38 @@ impl FrontendPlan {
                 );
             }
         }
+
+        if self.has_generic_inferred_param {
+            source.push_str("const front_same_type = fn (x: $T, y: T) T {\n    return y;\n};\n\n");
+        }
+
+        if self.has_comptime_value_param {
+            source.push_str(
+                "const front_comptime_add = fn (comptime n: u256, x: u256) u256 {\n    return x +% n;\n};\n\n",
+            );
+            source.push_str(
+                "const front_bool_bonus = fn (comptime flag: bool, x: u256) u256 {\n    if flag {\n        return x +% 0x811;\n    }\n    return x +% 0x812;\n};\n\n",
+            );
+        }
+
+        if self.has_comptime_compound_param {
+            source.push_str(
+                "const front_pair_bonus = fn (comptime p: Pair) u256 {\n    return p.a +% p.b;\n};\n\n",
+            );
+        }
+
+        if self.has_function_valued_comptime {
+            source.push_str("const front_id = fn (x: u256) u256 {\n    return x +% 0x831;\n};\n\n");
+            source.push_str(
+                "const front_alt = fn (x: u256) u256 {\n    return @evm_xor(x, 0x832);\n};\n\n",
+            );
+            source.push_str(
+                "const front_select_fn = fn (comptime use_alt: bool) function {\n    if use_alt {\n        return front_alt;\n    }\n    return front_id;\n};\n\n",
+            );
+            source.push_str(
+                "const front_apply_fn = fn (comptime f: function, x: u256) u256 {\n    return f(x);\n};\n\n",
+            );
+        }
     }
 
     fn render_plank_effects(&self, source: &mut String, entry_index: usize) {
@@ -917,6 +1202,48 @@ impl FrontendPlan {
             source.push_str("    acc = @evm_xor(acc, CBYTES_READ_WORD);\n");
         }
 
+        if self.has_generic_inferred_param {
+            source
+                .push_str("    acc = @evm_xor(acc, front_same_type(acc, @evm_xor(acc, 0x821)));\n");
+        }
+
+        if self.has_comptime_value_param {
+            source.push_str("    acc = @evm_xor(acc, front_comptime_add(7, acc));\n");
+            source.push_str("    acc = @evm_xor(acc, front_bool_bonus(true, acc));\n");
+        }
+
+        if self.has_comptime_compound_param {
+            source.push_str("    acc = @evm_xor(acc, front_pair_bonus(Pair { a: 3, b: 4 }));\n");
+        }
+
+        if self.has_function_valued_comptime {
+            writeln!(
+                source,
+                "    let front_selected_fn_{entry_index} = comptime {{ front_select_fn(true) }};"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(source, "    acc = @evm_xor(acc, front_selected_fn_{entry_index}(acc));")
+                .expect("writing to a string cannot fail");
+            source.push_str(
+                "    acc = @evm_xor(acc, front_apply_fn(comptime { front_select_fn(false) }, acc));\n",
+            );
+        }
+
+        if self.has_cbytes_edge_shapes {
+            source
+                .push_str("    if CBYTES_EMPTY_OK {\n        acc = @evm_xor(acc, 0x901);\n    }\n");
+            source.push_str(
+                "    if CBYTES_NESTED_SLICE_OK {\n        acc = @evm_xor(acc, 0x902);\n    }\n",
+            );
+            source.push_str(
+                "    if CBYTES_LONG_READ_OK {\n        acc = @evm_xor(acc, 0x903);\n    }\n",
+            );
+            source.push_str(
+                "    if CBYTES_CONCAT_SLICE_OK {\n        acc = @evm_xor(acc, 0x904);\n    }\n",
+            );
+            source.push_str("    acc = @evm_xor(acc, CBYTES_LONG_READ_WORD);\n");
+        }
+
         if self.has_parameterized_type {
             source.push_str(
                 "    if BOX_U256_PARAMETERIZED {\n        acc = @evm_xor(acc, 0x301);\n    }\n",
@@ -975,6 +1302,56 @@ impl FrontendPlan {
         if self.has_type_dependent_branch {
             source.push_str("    acc = @evm_xor(acc, FRONT_PAIR_TYPE_SCORE);\n");
             source.push_str("    acc = @evm_xor(acc, FRONT_TRIPLE_TYPE_SCORE);\n");
+        }
+
+        if self.has_anonymous_type_identity {
+            writeln!(
+                source,
+                "    let FrontAnon_{entry_index} = comptime {{ struct {{ value: u256, flag: bool }} }};"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let front_anon_{entry_index} = FrontAnon_{entry_index} {{ value: @evm_xor(acc, 0x941), flag: @evm_iszero(@evm_and(acc, 1)) }};"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(source, "    acc = @evm_xor(acc, front_anon_{entry_index}.value);")
+                .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    if front_anon_{entry_index}.flag {{\n        acc = @evm_xor(acc, 0x942);\n    }}"
+            )
+            .expect("writing to a string cannot fail");
+            source.push_str("    acc = @evm_xor(acc, FRONT_ANON_FIELD_COUNT);\n");
+            source.push_str("    acc = @evm_xor(acc, FRONT_IDENTITY_FIELD_COUNT);\n");
+        }
+
+        if self.has_cross_file_type_identity {
+            writeln!(
+                source,
+                "    let identity_a_{entry_index} = IdentityBoxAU256 {{ value: @evm_xor(acc, 0x951) }};"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let identity_b_{entry_index} = IdentityBoxBU256 {{ value: @evm_xor(acc, 0x952) }};"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    acc = @evm_xor(acc, identity_box_a_value(identity_a_{entry_index}));"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    acc = @evm_xor(acc, identity_box_b_value(identity_b_{entry_index}));"
+            )
+            .expect("writing to a string cannot fail");
+        }
+
+        if self.has_eval_branch_quota {
+            source.push_str("    acc = @evm_xor(acc, FRONT_QUOTA_LOOP_VALUE);\n");
+            source.push_str("    acc = @evm_xor(acc, FRONT_QUOTA_RECURSION_VALUE);\n");
         }
 
         if self.has_function_early_return {
@@ -1088,6 +1465,68 @@ impl FrontendPlan {
                 .expect("writing to a string cannot fail");
         }
 
+        if self.has_empty_compound {
+            source.push_str("    acc = @evm_xor(acc, FRONT_EMPTY_FIELD_COUNT);\n");
+            source.push_str("    acc = @evm_xor(acc, FRONT_NESTED_EMPTY_FIELD_COUNT);\n");
+        }
+
+        if self.has_comptime_only_compound {
+            source.push_str("    acc = @evm_xor(acc, FRONT_COMPTIME_ONLY_FIELD_COUNT);\n");
+            source.push_str(
+                "    if FRONT_COMPTIME_ONLY_OK {\n        acc = @evm_xor(acc, 0x961);\n    }\n",
+            );
+        }
+
+        if self.has_runtime_only_compound {
+            writeln!(source, "    let front_runtime_tuple_{entry_index} = @uninit(RuntimeTuple);")
+                .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let front_runtime_tuple_ptr_{entry_index} = @set_field(front_runtime_tuple_{entry_index}, 0, scratch);"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let front_runtime_tuple_filled_{entry_index} = @set_field(front_runtime_tuple_ptr_{entry_index}, 1, 64);"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    acc = @evm_xor(acc, @get_field(front_runtime_tuple_filled_{entry_index}, 1));"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let front_runtime_nested_{entry_index} = @uninit(RuntimeNestedScratch);"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let front_runtime_nested_item_{entry_index} = @set_field(@set_field(@uninit(RuntimeScratch), 0, scratch), 1, 96);"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let front_runtime_nested_item_set_{entry_index} = @set_field(front_runtime_nested_{entry_index}, 0, front_runtime_nested_item_{entry_index});"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let front_runtime_nested_filled_{entry_index} = @set_field(front_runtime_nested_item_set_{entry_index}, 1, 128);"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    acc = @evm_xor(acc, front_runtime_nested_filled_{entry_index}.item.len);"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    acc = @evm_xor(acc, front_runtime_nested_filled_{entry_index}.extra);"
+            )
+            .expect("writing to a string cannot fail");
+        }
+
         if self.has_data_offset {
             writeln!(
                 source,
@@ -1097,6 +1536,37 @@ impl FrontendPlan {
             writeln!(
                 source,
                 "    if @evm_eq(front_data_offset_{entry_index}, front_data_offset_{entry_index}) {{\n        acc = @evm_xor(acc, 0x701);\n    }}"
+            )
+            .expect("writing to a string cannot fail");
+        }
+
+        if self.has_data_offset_dedup {
+            writeln!(
+                source,
+                "    let front_data_first_{entry_index} = @data_offset(\"same-data\");"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let front_data_second_{entry_index} = @data_offset(\"same-data\");"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    if @evm_eq(front_data_first_{entry_index}, front_data_second_{entry_index}) {{\n        acc = @evm_xor(acc, 0x931);\n    }}"
+            )
+            .expect("writing to a string cannot fail");
+        }
+
+        if self.has_data_offset_concat {
+            writeln!(
+                source,
+                "    let front_data_concat_{entry_index} = @data_offset(@concat_cbytes((@slice_cbytes(CBYTES_LONG, 32, 64), \"a\")));"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    if @evm_eq(front_data_concat_{entry_index}, front_data_concat_{entry_index}) {{\n        acc = @evm_xor(acc, 0x932);\n    }}"
             )
             .expect("writing to a string cannot fail");
         }
@@ -1174,6 +1644,32 @@ impl FrontendPlan {
             source.push_str("                acc := xor(acc, 0x0203000000000000000000000000000000000000000000000000000000000000)\n");
         }
 
+        if self.has_generic_inferred_param {
+            source.push_str("                acc := xor(acc, xor(acc, 0x821))\n");
+        }
+
+        if self.has_comptime_value_param {
+            source.push_str("                acc := xor(acc, add(acc, 7))\n");
+            source.push_str("                acc := xor(acc, add(acc, 0x811))\n");
+        }
+
+        if self.has_comptime_compound_param {
+            source.push_str("                acc := xor(acc, 7)\n");
+        }
+
+        if self.has_function_valued_comptime {
+            source.push_str("                acc := xor(acc, xor(acc, 0x832))\n");
+            source.push_str("                acc := xor(acc, add(acc, 0x831))\n");
+        }
+
+        if self.has_cbytes_edge_shapes {
+            source.push_str("                acc := xor(acc, 0x901)\n");
+            source.push_str("                acc := xor(acc, 0x902)\n");
+            source.push_str("                acc := xor(acc, 0x903)\n");
+            source.push_str("                acc := xor(acc, 0x904)\n");
+            source.push_str("                acc := xor(acc, 0x02030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20ff)\n");
+        }
+
         if self.has_parameterized_type {
             source.push_str("                acc := xor(acc, 0x301)\n");
             source.push_str("                acc := xor(acc, 0x302)\n");
@@ -1209,6 +1705,30 @@ impl FrontendPlan {
         if self.has_type_dependent_branch {
             source.push_str("                acc := xor(acc, 12)\n");
             source.push_str("                acc := xor(acc, 23)\n");
+        }
+
+        if self.has_anonymous_type_identity {
+            source.push_str("                {\n");
+            source.push_str("                    let front_anon_flag := iszero(and(acc, 1))\n");
+            source.push_str("                    acc := xor(acc, xor(acc, 0x941))\n");
+            source.push_str("                    if front_anon_flag { acc := xor(acc, 0x942) }\n");
+            source.push_str("                    acc := xor(acc, 2)\n");
+            source.push_str("                    acc := xor(acc, 2)\n");
+            source.push_str("                }\n");
+        }
+
+        if self.has_cross_file_type_identity {
+            source.push_str("                {\n");
+            source.push_str("                    let identity_a := xor(acc, 0x951)\n");
+            source.push_str("                    let identity_b := xor(acc, 0x952)\n");
+            source.push_str("                    acc := xor(acc, identity_a)\n");
+            source.push_str("                    acc := xor(acc, identity_b)\n");
+            source.push_str("                }\n");
+        }
+
+        if self.has_eval_branch_quota {
+            source.push_str("                acc := xor(acc, 28)\n");
+            source.push_str("                acc := xor(acc, 5)\n");
         }
 
         if self.has_function_early_return {
@@ -1276,8 +1796,32 @@ impl FrontendPlan {
             source.push_str("                acc := xor(acc, 32)\n");
         }
 
+        if self.has_empty_compound {
+            source.push_str("                acc := xor(acc, 0)\n");
+            source.push_str("                acc := xor(acc, 2)\n");
+        }
+
+        if self.has_comptime_only_compound {
+            source.push_str("                acc := xor(acc, 2)\n");
+            source.push_str("                acc := xor(acc, 0x961)\n");
+        }
+
+        if self.has_runtime_only_compound {
+            source.push_str("                acc := xor(acc, 64)\n");
+            source.push_str("                acc := xor(acc, 96)\n");
+            source.push_str("                acc := xor(acc, 128)\n");
+        }
+
         if self.has_data_offset {
             source.push_str("                acc := xor(acc, 0x701)\n");
+        }
+
+        if self.has_data_offset_dedup {
+            source.push_str("                acc := xor(acc, 0x931)\n");
+        }
+
+        if self.has_data_offset_concat {
+            source.push_str("                acc := xor(acc, 0x932)\n");
         }
 
         if self.has_high_level_operator {
@@ -1332,46 +1876,88 @@ impl FrontendPlan {
     }
 
     fn classify(&self, classification: &mut SeedClassification) {
-        classification.has_struct |= self.has_struct || self.has_comptime_control_flow;
-        classification.has_tuple |= self.has_tuple;
+        classification.has_struct |= self.has_struct
+            || self.has_comptime_control_flow
+            || self.has_comptime_compound_param
+            || self.has_anonymous_type_identity
+            || self.has_cross_file_type_identity
+            || self.has_comptime_only_compound
+            || self.has_runtime_only_compound;
+        classification.has_tuple |=
+            self.has_tuple || self.has_empty_compound || self.has_runtime_only_compound;
         classification.has_compound_literal |= self.has_struct
             || self.has_tuple
             || self.has_parameterized_type
             || self.has_function_returns_compound
             || self.has_nested_compound
-            || self.has_runtime_uninit;
+            || self.has_runtime_uninit
+            || self.has_comptime_compound_param
+            || self.has_anonymous_type_identity
+            || self.has_cross_file_type_identity
+            || self.has_empty_compound
+            || self.has_comptime_only_compound
+            || self.has_runtime_only_compound;
         classification.has_field_access |= self.has_struct
             || self.has_tuple
             || self.has_parameterized_type
             || self.has_function_returns_compound
             || self.has_nested_compound
-            || self.has_runtime_uninit;
-        classification.has_field_update |=
-            self.has_tuple || self.has_nested_compound || self.has_runtime_uninit;
+            || self.has_runtime_uninit
+            || self.has_comptime_compound_param
+            || self.has_anonymous_type_identity
+            || self.has_cross_file_type_identity
+            || self.has_comptime_only_compound
+            || self.has_runtime_only_compound;
+        classification.has_field_update |= self.has_tuple
+            || self.has_nested_compound
+            || self.has_runtime_uninit
+            || self.has_runtime_only_compound;
         classification.has_comptime_type_reflection |= self.has_comptime_type_reflection;
-        classification.has_cbytes_builtin |= self.has_cbytes_builtin;
+        classification.has_cbytes_builtin |= self.has_cbytes_builtin || self.has_cbytes_edge_shapes;
         classification.has_high_level_operator |= self.has_high_level_operator;
         classification.has_core_ops_operator |= self.has_core_ops_operator;
-        classification.has_helper_function |= self.has_helper_function;
+        classification.has_helper_function |= self.has_helper_function
+            || self.has_generic_inferred_param
+            || self.has_comptime_value_param
+            || self.has_comptime_compound_param
+            || self.has_function_valued_comptime;
         classification.has_nested_helper_call |= self.has_nested_helper_call;
-        classification.has_import |= self.has_import;
+        classification.has_import |= self.has_import || self.has_cross_file_type_identity;
         classification.has_import_single |= self.has_import_single;
-        classification.has_import_group |= self.has_import;
-        classification.has_import_alias |= self.has_import_alias;
+        classification.has_import_group |= self.has_import || self.has_cross_file_type_identity;
+        classification.has_import_alias |=
+            self.has_import_alias || self.has_cross_file_type_identity;
         classification.has_import_glob |= self.has_import_glob;
-        classification.has_deep_import |= self.has_deep_import;
+        classification.has_deep_import |= self.has_deep_import || self.has_cross_file_type_identity;
         classification.has_comments |= self.has_comments;
         classification.has_binary_literal |= self.has_binary_literal;
         classification.has_hex_literal |= self.has_hex_literal;
         classification.has_parameterized_type |= self.has_parameterized_type;
-        classification.has_comptime_control_flow |= self.has_comptime_control_flow;
+        classification.has_comptime_control_flow |= self.has_comptime_control_flow
+            || self.has_anonymous_type_identity
+            || self.has_eval_branch_quota;
         classification.has_comptime_loop |= self.has_comptime_loop;
         classification.has_type_dependent_branch |= self.has_type_dependent_branch;
         classification.has_function_returns_compound |= self.has_function_returns_compound;
         classification.has_function_early_return |= self.has_function_early_return;
         classification.has_nested_compound |= self.has_nested_compound;
-        classification.has_runtime_uninit |= self.has_runtime_uninit;
-        classification.has_data_offset |= self.has_data_offset;
+        classification.has_runtime_uninit |=
+            self.has_runtime_uninit || self.has_runtime_only_compound;
+        classification.has_data_offset |=
+            self.has_data_offset || self.has_data_offset_dedup || self.has_data_offset_concat;
+        classification.has_generic_inferred_param |= self.has_generic_inferred_param;
+        classification.has_comptime_value_param |= self.has_comptime_value_param;
+        classification.has_comptime_compound_param |= self.has_comptime_compound_param;
+        classification.has_function_valued_comptime |= self.has_function_valued_comptime;
+        classification.has_cbytes_edge_shapes |= self.has_cbytes_edge_shapes;
+        classification.has_data_offset_dedup |= self.has_data_offset_dedup;
+        classification.has_data_offset_concat |= self.has_data_offset_concat;
+        classification.has_anonymous_type_identity |= self.has_anonymous_type_identity;
+        classification.has_cross_file_type_identity |= self.has_cross_file_type_identity;
+        classification.has_eval_branch_quota |= self.has_eval_branch_quota;
+        classification.has_empty_compound |= self.has_empty_compound;
+        classification.has_comptime_only_compound |= self.has_comptime_only_compound;
+        classification.has_runtime_only_compound |= self.has_runtime_only_compound;
         classification.has_std_registered |= self.has_core_ops_operator;
     }
 
@@ -1388,6 +1974,11 @@ impl FrontendPlan {
             || self.has_function_returns_compound
             || self.has_nested_compound
             || self.has_runtime_uninit
+            || self.has_comptime_compound_param
+            || self.has_anonymous_type_identity
+            || self.has_empty_compound
+            || self.has_comptime_only_compound
+            || self.has_runtime_only_compound
     }
 }
 
@@ -2964,12 +3555,14 @@ mod tests {
         let case = frontend_feature_case();
         let sources = case.plank_sources();
 
-        assert_eq!(sources.files.len(), 6);
+        assert_eq!(sources.files.len(), 8);
         assert_eq!(sources.std_mode, crate::StdMode::RepoStd);
         assert!(sources.to_string().contains("== gen/types.plk =="));
         assert!(sources.to_string().contains("== gen/extras.plk =="));
         assert!(sources.to_string().contains("== gen/glob_helpers.plk =="));
         assert!(sources.to_string().contains("== gen/nested/boxes.plk =="));
+        assert!(sources.to_string().contains("== gen/identity/a.plk =="));
+        assert!(sources.to_string().contains("== gen/identity/b.plk =="));
         assert!(sources.to_string().contains("import gen::types"));
         assert!(sources.to_string().contains("import gen::extras::SINGLE_IMPORT_MARKER;"));
         assert!(sources.to_string().contains("import gen::glob_helpers::*;"));
@@ -3008,6 +3601,19 @@ mod tests {
         assert!(sources.contains("const NestedOuter = struct"));
         assert!(sources.contains("let front_uninit_0 = @uninit(RuntimeScratch);"));
         assert!(sources.contains("@data_offset(@slice_cbytes"));
+        assert!(sources.contains("const front_same_type = fn (x: $T, y: T) T"));
+        assert!(sources.contains("const front_comptime_add = fn (comptime n: u256"));
+        assert!(sources.contains("const front_pair_bonus = fn (comptime p: Pair) u256"));
+        assert!(sources.contains("const front_select_fn = fn (comptime use_alt: bool) function"));
+        assert!(sources.contains("const CBYTES_EMPTY_OK = @slice_cbytes(\"\", 0, 0) == \"\";"));
+        assert!(sources.contains("let front_data_first_0 = @data_offset(\"same-data\");"));
+        assert!(sources.contains("@data_offset(@concat_cbytes"));
+        assert!(sources.contains("const front_identity_type = fn (comptime T: type) type { T };"));
+        assert!(sources.contains("import gen::identity::a::{IdentityBoxU256 as IdentityBoxAU256"));
+        assert!(sources.contains("const FRONT_QUOTA_LOOP_VALUE = comptime"));
+        assert!(sources.contains("const EmptyTuple = tuple {};"));
+        assert!(sources.contains("const ComptimeCarrier = struct { ty: type, n: u256 };"));
+        assert!(sources.contains("const RuntimeTuple = tuple { memptr, u256 };"));
     }
 
     #[test]
@@ -3028,6 +3634,19 @@ mod tests {
         assert!(classification.has_nested_compound);
         assert!(classification.has_runtime_uninit);
         assert!(classification.has_data_offset);
+        assert!(classification.has_generic_inferred_param);
+        assert!(classification.has_comptime_value_param);
+        assert!(classification.has_comptime_compound_param);
+        assert!(classification.has_function_valued_comptime);
+        assert!(classification.has_cbytes_edge_shapes);
+        assert!(classification.has_data_offset_dedup);
+        assert!(classification.has_data_offset_concat);
+        assert!(classification.has_anonymous_type_identity);
+        assert!(classification.has_cross_file_type_identity);
+        assert!(classification.has_eval_branch_quota);
+        assert!(classification.has_empty_compound);
+        assert!(classification.has_comptime_only_compound);
+        assert!(classification.has_runtime_only_compound);
     }
 
     #[test]
@@ -3186,6 +3805,19 @@ mod tests {
                 has_nested_compound: true,
                 has_runtime_uninit: true,
                 has_data_offset: true,
+                has_generic_inferred_param: true,
+                has_comptime_value_param: true,
+                has_comptime_compound_param: true,
+                has_function_valued_comptime: true,
+                has_cbytes_edge_shapes: true,
+                has_data_offset_dedup: true,
+                has_data_offset_concat: true,
+                has_anonymous_type_identity: true,
+                has_cross_file_type_identity: true,
+                has_eval_branch_quota: true,
+                has_empty_compound: true,
+                has_comptime_only_compound: true,
+                has_runtime_only_compound: true,
             },
         }
     }
