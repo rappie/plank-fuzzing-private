@@ -480,11 +480,15 @@ impl FrontendPlan {
 
         if self.has_binary_literal {
             source.push_str("const FRONT_BINARY_LITERAL = 0b1010_0011;\n");
+        } else if self.has_import {
+            source.push_str("const FRONT_BINARY_LITERAL = 0;\n");
         }
         if self.has_hex_literal {
             source.push_str("const FRONT_HEX_LITERAL = 0xfeed;\n");
+        } else if self.has_import {
+            source.push_str("const FRONT_HEX_LITERAL = 0;\n");
         }
-        if self.has_binary_literal || self.has_hex_literal {
+        if self.has_binary_literal || self.has_hex_literal || self.has_import {
             source.push('\n');
         }
     }
@@ -512,6 +516,10 @@ impl FrontendPlan {
         if self.has_high_level_operator || self.has_nested_helper_call {
             source.push_str(
                 "const operator_mix = fn (x: u256, y: u256) u256 {\n    let a = x +% y;\n    let b = a -% (y & 0xff);\n    let c = b *% 3;\n    let d = (c | y) ^ (x & 0xff);\n    let e = (d << 1) >> 1;\n    let inv = ~x;\n    let mut bonus = 11;\n    if x < y {\n        bonus = bonus +% 1;\n    }\n    if x > y {\n        bonus = bonus +% 2;\n    }\n    if x == y {\n        bonus = bonus +% 3;\n    }\n    if !(x != y) {\n        bonus = bonus +% 5;\n    }\n    return e +% inv +% bonus;\n};\n\n",
+            );
+        } else if self.has_import {
+            source.push_str(
+                "const operator_mix = fn (x: u256, y: u256) u256 { return x +% y; };\n\n",
             );
         }
 
@@ -682,7 +690,11 @@ impl FrontendPlan {
             source
                 .push_str("                acc := xor(acc, yul_nested_mix(acc, calldatasize()))\n");
         } else if self.has_helper_function && !(self.has_struct || self.has_tuple) {
-            source.push_str("                acc := xor(acc, add(acc, 7))\n");
+            if self.has_core_ops_operator {
+                source.push_str("                acc := xor(acc, yul_core_operator_mix(acc, 7))\n");
+            } else {
+                source.push_str("                acc := xor(acc, add(acc, 7))\n");
+            }
         }
 
         if self.has_binary_literal {
@@ -2333,6 +2345,78 @@ mod tests {
         .unwrap_or_else(|err| {
             panic!("feature case did not compile:\n{err}\n\n{}", case.plank_sources())
         });
+    }
+
+    #[test]
+    fn imported_frontend_symbols_have_fallback_definitions() {
+        let case = GeneratedCase {
+            mode: ProgramMode::RawFallback,
+            entries: vec![Entry {
+                selector: 0,
+                config: EntryConfig {
+                    fragments: Vec::new(),
+                    exit: ExitConfig { kind: ExitKind::Stop, output_len: 0 },
+                    constants: ConstantPool { words: [[0; 32]; 4] },
+                },
+            }],
+            calls: vec![CallStep { selected_entry: 0, payload: Vec::new() }],
+            frontend: FrontendPlan {
+                has_struct: true,
+                has_tuple: true,
+                has_comptime_type_reflection: false,
+                has_cbytes_builtin: true,
+                has_high_level_operator: false,
+                has_core_ops_operator: true,
+                has_helper_function: true,
+                has_nested_helper_call: false,
+                has_import: true,
+                has_comments: false,
+                has_binary_literal: false,
+                has_hex_literal: true,
+            },
+        };
+        let sources = case.plank_sources();
+        let rendered = sources.to_string();
+
+        assert!(rendered.contains("const FRONT_BINARY_LITERAL = 0;"));
+        assert!(rendered.contains("const operator_mix = fn (x: u256, y: u256) u256"));
+        crate::compiler::plank::compile_plank_sources(&sources, BackendKind::SirDebug, None)
+            .unwrap_or_else(|err| {
+                panic!("frontend fallback case did not compile:\n{err}\n\n{sources}")
+            });
+    }
+
+    #[test]
+    fn helper_only_core_operator_effect_is_mirrored_in_yul() {
+        let case = GeneratedCase {
+            mode: ProgramMode::RawFallback,
+            entries: vec![Entry {
+                selector: 0,
+                config: EntryConfig {
+                    fragments: Vec::new(),
+                    exit: ExitConfig { kind: ExitKind::Stop, output_len: 0 },
+                    constants: ConstantPool { words: [[0; 32]; 4] },
+                },
+            }],
+            calls: vec![CallStep { selected_entry: 0, payload: Vec::new() }],
+            frontend: FrontendPlan {
+                has_struct: false,
+                has_tuple: false,
+                has_comptime_type_reflection: false,
+                has_cbytes_builtin: false,
+                has_high_level_operator: false,
+                has_core_ops_operator: true,
+                has_helper_function: true,
+                has_nested_helper_call: false,
+                has_import: false,
+                has_comments: false,
+                has_binary_literal: false,
+                has_hex_literal: false,
+            },
+        };
+
+        assert!(case.plank_source().contains("core_operator_mix(acc, 7)"));
+        assert!(case.solidity_source().contains("yul_core_operator_mix(acc, 7)"));
     }
 
     #[test]
