@@ -476,6 +476,9 @@ impl FrontendPlan {
         if plan.has_comptime_loop || plan.has_type_dependent_branch {
             plan.has_comptime_control_flow = true;
         }
+        if plan.has_comptime_control_flow {
+            plan.has_struct = true;
+        }
         if plan.has_type_dependent_branch {
             plan.has_struct = true;
             plan.has_tuple = true;
@@ -1329,7 +1332,7 @@ impl FrontendPlan {
     }
 
     fn classify(&self, classification: &mut SeedClassification) {
-        classification.has_struct |= self.has_struct;
+        classification.has_struct |= self.has_struct || self.has_comptime_control_flow;
         classification.has_tuple |= self.has_tuple;
         classification.has_compound_literal |= self.has_struct
             || self.has_tuple
@@ -1376,6 +1379,7 @@ impl FrontendPlan {
         self.has_struct
             || self.has_tuple
             || self.has_comptime_type_reflection
+            || self.has_comptime_control_flow
             || self.has_helper_function
             || self.has_nested_helper_call
             || self.has_import
@@ -3063,6 +3067,32 @@ mod tests {
         crate::compiler::plank::compile_plank_sources(&sources, BackendKind::SirDebug, None)
             .unwrap_or_else(|err| {
                 panic!("frontend fallback case did not compile:\n{err}\n\n{sources}")
+            });
+    }
+
+    #[test]
+    fn comptime_control_flow_renders_required_struct_definitions() {
+        let case = GeneratedCase {
+            mode: ProgramMode::RawFallback,
+            entries: vec![Entry {
+                selector: 0,
+                config: EntryConfig {
+                    fragments: Vec::new(),
+                    exit: ExitConfig { kind: ExitKind::Stop, output_len: 0 },
+                    constants: ConstantPool { words: [[0; 32]; 4] },
+                },
+            }],
+            calls: vec![CallStep { selected_entry: 0, payload: Vec::new() }],
+            frontend: FrontendPlan { has_comptime_control_flow: true, ..Default::default() },
+        };
+        let sources = case.plank_sources();
+        let rendered = sources.to_string();
+
+        assert!(rendered.contains("const Pair = struct"));
+        assert!(rendered.contains("if @is_struct(Pair)"));
+        crate::compiler::plank::compile_plank_sources(&sources, BackendKind::SirDebug, None)
+            .unwrap_or_else(|err| {
+                panic!("comptime control-flow case did not compile:\n{err}\n\n{sources}")
             });
     }
 
