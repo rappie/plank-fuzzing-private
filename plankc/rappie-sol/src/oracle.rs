@@ -1,7 +1,8 @@
 use crate::{
     FuzzCase,
-    compiler::{plank::compile_plank_source, solx::compile_solidity_source},
+    compiler::{plank::compile_plank_sources, solx::compile_solidity_source},
     evm::{EvmTrace, run_bytecode_sequence},
+    sources::PlankSourceSet,
 };
 use alloy_primitives::hex;
 use plank_driver::BackendKind;
@@ -35,19 +36,19 @@ pub enum HarnessError {
 }
 
 pub fn compare_plank_solidity(case: &FuzzCase) -> Result<(), HarnessError> {
-    let plank_source = case.plank_source();
+    let plank_sources = case.plank_sources();
     let solidity_source = case.solidity_source();
     let calldatas = case.calldatas();
 
-    compare_sources(&plank_source, &solidity_source, &calldatas)
+    compare_source_set(&plank_sources, &solidity_source, &calldatas)
 }
 
 pub fn execute_plank_solidity(case: &FuzzCase) -> Result<(Execution, Execution), HarnessError> {
-    let plank_source = case.plank_source();
+    let plank_sources = case.plank_sources();
     let solidity_source = case.solidity_source();
     let calldatas = case.calldatas();
 
-    execute_sources(&plank_source, &solidity_source, &calldatas)
+    execute_source_set(&plank_sources, &solidity_source, &calldatas)
 }
 
 pub fn compare_sources(
@@ -55,18 +56,31 @@ pub fn compare_sources(
     solidity_source: &str,
     calldatas: &[Vec<u8>],
 ) -> Result<(), HarnessError> {
-    let (plank, solidity) = execute_sources(plank_source, solidity_source, calldatas)?;
+    let plank_sources = PlankSourceSet::single_main(plank_source.to_string());
+    let (plank, solidity) = execute_source_set(&plank_sources, solidity_source, calldatas)?;
 
     compare_traces(plank, solidity)
 }
 
-fn execute_sources(
-    plank_source: &str,
+pub fn compare_source_set(
+    plank_sources: &PlankSourceSet,
+    solidity_source: &str,
+    calldatas: &[Vec<u8>],
+) -> Result<(), HarnessError> {
+    let (plank, solidity) = execute_source_set(plank_sources, solidity_source, calldatas)?;
+
+    compare_traces(plank, solidity)
+}
+
+fn execute_source_set(
+    plank_sources: &PlankSourceSet,
     solidity_source: &str,
     calldatas: &[Vec<u8>],
 ) -> Result<(Execution, Execution), HarnessError> {
-    let plank_bytecode = compile_plank_source(plank_source, PLANK_BACKEND, PLANK_OPTIMIZATIONS)
-        .map_err(|err| HarnessError::PlankCompile { diagnostics: err.diagnostics().to_string() })?;
+    let plank_bytecode = compile_plank_sources(plank_sources, PLANK_BACKEND, PLANK_OPTIMIZATIONS)
+        .map_err(|err| HarnessError::PlankCompile {
+        diagnostics: err.diagnostics().to_string(),
+    })?;
     let solidity_bytecode = compile_solidity_source(solidity_source)
         .map_err(|err| HarnessError::SolidityCompile { diagnostics: err.to_string() })?;
 

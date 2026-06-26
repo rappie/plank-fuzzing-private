@@ -1,8 +1,11 @@
-use crate::evm::{
-    CALLER_WORD, EMPTY_ACCOUNT_WORD, HELPER_CODE_WORD, HELPER_ECHO_WORD, HELPER_REVERT_WORD,
+use crate::{
+    evm::{
+        CALLER_WORD, EMPTY_ACCOUNT_WORD, HELPER_CODE_WORD, HELPER_ECHO_WORD, HELPER_REVERT_WORD,
+    },
+    sources::{PlankSourceFile, PlankSourceSet, StdMode},
 };
 use arbitrary::{Arbitrary, Unstructured};
-use std::{collections::BTreeSet, fmt::Write};
+use std::{collections::BTreeSet, fmt::Write, path::PathBuf};
 
 const MAX_DISPATCH_ENTRIES: usize = 6;
 const MAX_CALL_STEPS: usize = 4;
@@ -74,6 +77,22 @@ pub struct SeedClassification {
     pub has_stop_exit: bool,
     pub has_invalid_exit: bool,
     pub exit_kind: SeedExitKind,
+    pub has_struct: bool,
+    pub has_tuple: bool,
+    pub has_compound_literal: bool,
+    pub has_field_access: bool,
+    pub has_field_update: bool,
+    pub has_comptime_type_reflection: bool,
+    pub has_cbytes_builtin: bool,
+    pub has_high_level_operator: bool,
+    pub has_core_ops_operator: bool,
+    pub has_helper_function: bool,
+    pub has_nested_helper_call: bool,
+    pub has_import: bool,
+    pub has_comments: bool,
+    pub has_binary_literal: bool,
+    pub has_hex_literal: bool,
+    pub has_std_registered: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,11 +100,14 @@ pub(crate) struct GeneratedCase {
     mode: ProgramMode,
     entries: Vec<Entry>,
     calls: Vec<CallStep>,
+    frontend: FrontendPlan,
 }
 
 impl GeneratedCase {
     pub(crate) fn plank_source(&self) -> String {
         let mut source = String::new();
+
+        self.frontend.render_main_header(&mut source);
 
         if self.mode == ProgramMode::SelectorDispatch {
             for (index, entry) in self.entries.iter().enumerate() {
@@ -96,7 +118,7 @@ impl GeneratedCase {
         }
 
         for (index, entry) in self.entries.iter().enumerate() {
-            render_plank_entry(&mut source, index, entry, self.mode);
+            render_plank_entry(&mut source, index, entry, self.mode, &self.frontend);
             source.push('\n');
         }
 
@@ -115,6 +137,25 @@ impl GeneratedCase {
         source
     }
 
+    pub(crate) fn plank_sources(&self) -> PlankSourceSet {
+        let mut files = vec![PlankSourceFile::new("main.plk", self.plank_source())];
+        if self.frontend.has_import {
+            files.push(PlankSourceFile::new("gen/types.plk", self.frontend.render_types_file()));
+            files
+                .push(PlankSourceFile::new("gen/helpers.plk", self.frontend.render_helpers_file()));
+        }
+
+        PlankSourceSet {
+            entry_path: PathBuf::from("main.plk"),
+            files,
+            std_mode: if self.frontend.has_core_ops_operator {
+                StdMode::RepoStd
+            } else {
+                StdMode::None
+            },
+        }
+    }
+
     pub(crate) fn solidity_source(&self) -> String {
         let mut source = String::new();
         source.push_str("// SPDX-License-Identifier: MIT\n");
@@ -122,9 +163,10 @@ impl GeneratedCase {
         source.push_str("contract C {\n");
         source.push_str("    fallback() external payable {\n");
         source.push_str("        assembly (\"memory-safe\") {\n");
+        self.frontend.render_yul_helper_defs(&mut source);
 
         for (index, entry) in self.entries.iter().enumerate() {
-            render_yul_entry(&mut source, index, entry, self.mode);
+            render_yul_entry(&mut source, index, entry, self.mode, &self.frontend);
             source.push('\n');
         }
 
@@ -217,7 +259,25 @@ impl GeneratedCase {
                 .first()
                 .map(|call| self.entries[call.selected_entry].config.exit.kind.into())
                 .unwrap_or(SeedExitKind::Stop),
+            has_struct: false,
+            has_tuple: false,
+            has_compound_literal: false,
+            has_field_access: false,
+            has_field_update: false,
+            has_comptime_type_reflection: false,
+            has_cbytes_builtin: false,
+            has_high_level_operator: false,
+            has_core_ops_operator: false,
+            has_helper_function: false,
+            has_nested_helper_call: false,
+            has_import: false,
+            has_comments: false,
+            has_binary_literal: false,
+            has_hex_literal: false,
+            has_std_registered: false,
         };
+
+        self.frontend.classify(&mut classification);
 
         for entry_index in active_entries {
             let entry = &self.entries[entry_index];
@@ -253,7 +313,9 @@ impl<'a> Arbitrary<'a> for GeneratedCase {
             calls.push(CallStep::arbitrary(u, entry_count)?);
         }
 
-        Ok(Self { mode, entries, calls })
+        let frontend = FrontendPlan::arbitrary(u)?;
+
+        Ok(Self { mode, entries, calls, frontend })
     }
 }
 
@@ -275,6 +337,408 @@ impl From<ProgramMode> for SeedProgramMode {
 impl ProgramMode {
     fn arbitrary(u: &mut Unstructured<'_>) -> arbitrary::Result<Self> {
         Ok(if u.int_in_range(0..=3)? == 0 { Self::RawFallback } else { Self::SelectorDispatch })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct FrontendPlan {
+    has_struct: bool,
+    has_tuple: bool,
+    has_comptime_type_reflection: bool,
+    has_cbytes_builtin: bool,
+    has_high_level_operator: bool,
+    has_core_ops_operator: bool,
+    has_helper_function: bool,
+    has_nested_helper_call: bool,
+    has_import: bool,
+    has_comments: bool,
+    has_binary_literal: bool,
+    has_hex_literal: bool,
+}
+
+impl FrontendPlan {
+    fn arbitrary(u: &mut Unstructured<'_>) -> arbitrary::Result<Self> {
+        let mask = u.int_in_range(0u16..=0x0fff)?;
+        let mut plan = Self {
+            has_struct: mask & (1 << 0) != 0,
+            has_tuple: mask & (1 << 1) != 0,
+            has_comptime_type_reflection: mask & (1 << 2) != 0,
+            has_cbytes_builtin: mask & (1 << 3) != 0,
+            has_high_level_operator: mask & (1 << 4) != 0,
+            has_core_ops_operator: mask & (1 << 5) != 0,
+            has_helper_function: mask & (1 << 6) != 0,
+            has_nested_helper_call: mask & (1 << 7) != 0,
+            has_import: mask & (1 << 8) != 0,
+            has_comments: mask & (1 << 9) != 0,
+            has_binary_literal: mask & (1 << 10) != 0,
+            has_hex_literal: mask & (1 << 11) != 0,
+        };
+
+        if plan.has_import {
+            plan.has_struct = true;
+            plan.has_tuple = true;
+            plan.has_helper_function = true;
+        }
+        if plan.has_nested_helper_call {
+            plan.has_helper_function = true;
+            plan.has_high_level_operator = true;
+        }
+        if plan.has_comptime_type_reflection {
+            plan.has_struct = true;
+            plan.has_tuple = true;
+        }
+        if plan.has_cbytes_builtin {
+            plan.has_hex_literal = true;
+        }
+
+        Ok(plan)
+    }
+
+    fn render_main_header(&self, source: &mut String) {
+        if self.has_comments {
+            source.push_str("// Generated compiler-coverage feature prelude.\n");
+            source.push_str("/* Exercises imports, compounds, comptime data, and operators. */\n");
+        }
+
+        if self.has_import {
+            source.push_str(
+                "import gen::types::{Pair, Triple, Numeric, IS_PAIR_STRUCT, IS_TRIPLE_TUPLE, FIELD_A_OK, FIELD_INDEX_B, FIELD_TYPE_IS_U256, TYPE_INDEX_NUMERIC, DEFAULT_PAIR_A, ACTIVE_EVM, CONST_COMPTIME, CBYTES_SLICE_OK, CBYTES_READ_WORD, CBYTES_READ_OK, CBYTES_CONCAT_OK, CBYTES_KECCAK_OK, CBYTES_SHA_OK, FRONT_BINARY_LITERAL, FRONT_HEX_LITERAL};\n",
+            );
+            source.push_str(
+                "import gen::helpers::{mix_pair, make_triple, mix_triple, operator_mix, core_operator_mix, nested_mix};\n\n",
+            );
+        } else {
+            self.render_type_defs(source);
+            self.render_helper_defs(source, false);
+        }
+    }
+
+    fn render_types_file(&self) -> String {
+        let mut source = String::new();
+        if self.has_comments {
+            source.push_str("// Generated imported type and comptime definitions.\n");
+        }
+        self.render_type_defs(&mut source);
+        source
+    }
+
+    fn render_helpers_file(&self) -> String {
+        let mut source = String::new();
+        if self.has_comments {
+            source.push_str("// Generated imported helper functions.\n");
+        }
+        self.render_helper_defs(&mut source, true);
+        source
+    }
+
+    fn render_type_defs(&self, source: &mut String) {
+        if self.needs_compound_defs() {
+            source.push_str("const Pair = struct { a: u256, b: u256 };\n");
+            source.push_str("const Triple = tuple { u256, u256, u256 };\n");
+            source.push_str("const Numeric = struct 42 { a: u256 };\n");
+            source.push('\n');
+        }
+
+        if self.has_comptime_type_reflection {
+            source.push_str("const IS_PAIR_STRUCT = @is_struct(Pair);\n");
+            source.push_str("const IS_TRIPLE_TUPLE = @is_tuple(Triple);\n");
+            source.push_str("const FIELD_A_OK = @field_name(Pair, 0) == \"a\";\n");
+            source.push_str("const FIELD_INDEX_B = @field_index(Pair, \"b\");\n");
+            source.push_str("const FIELD_TYPE_IS_U256 = @field_type(Pair, 0) == u256;\n");
+            source.push_str("const TYPE_INDEX_NUMERIC = @type_index(Numeric);\n");
+            source.push_str("const DEFAULT_PAIR = @uninit(Pair);\n");
+            source.push_str("const DEFAULT_PAIR_A = DEFAULT_PAIR.a;\n");
+            source.push_str("const ACTIVE_EVM = @active_evm_version();\n");
+            source.push_str("const CONST_COMPTIME = @in_comptime();\n\n");
+        } else if self.has_import {
+            source.push_str("const IS_PAIR_STRUCT = true;\n");
+            source.push_str("const IS_TRIPLE_TUPLE = true;\n");
+            source.push_str("const FIELD_A_OK = true;\n");
+            source.push_str("const FIELD_INDEX_B = 1;\n");
+            source.push_str("const FIELD_TYPE_IS_U256 = true;\n");
+            source.push_str("const TYPE_INDEX_NUMERIC = 42;\n");
+            source.push_str("const DEFAULT_PAIR_A = 0;\n");
+            source.push_str("const ACTIVE_EVM = 13;\n");
+            source.push_str("const CONST_COMPTIME = true;\n\n");
+        }
+
+        if self.has_cbytes_builtin {
+            source.push_str("const CBYTES_SLICE_OK = @slice_cbytes(\"hello\", 1, 4) == \"ell\";\n");
+            source.push_str("const CBYTES_READ_WORD = @padded_read_cbytes(hex\"010203\", 1);\n");
+            source.push_str("const CBYTES_READ_OK = CBYTES_READ_WORD == 0x0203000000000000000000000000000000000000000000000000000000000000;\n");
+            source.push_str("const CBYTES_CONCAT_OK = @concat_cbytes((\"a\", 1, hex\"ff\")) == \"a\" hex\"0000000000000000000000000000000000000000000000000000000000000001ff\";\n");
+            source.push_str("const CBYTES_KECCAK_OK = @keccak256_cbytes(\"abc\") == 0x4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45;\n");
+            source.push_str("const CBYTES_SHA_OK = @sha256_cbytes(\"abc\") == 0xba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad;\n\n");
+        } else if self.has_import {
+            source.push_str("const CBYTES_SLICE_OK = true;\n");
+            source.push_str("const CBYTES_READ_WORD = 0;\n");
+            source.push_str("const CBYTES_READ_OK = true;\n");
+            source.push_str("const CBYTES_CONCAT_OK = true;\n");
+            source.push_str("const CBYTES_KECCAK_OK = true;\n");
+            source.push_str("const CBYTES_SHA_OK = true;\n\n");
+        }
+
+        if self.has_binary_literal {
+            source.push_str("const FRONT_BINARY_LITERAL = 0b1010_0011;\n");
+        }
+        if self.has_hex_literal {
+            source.push_str("const FRONT_HEX_LITERAL = 0xfeed;\n");
+        }
+        if self.has_binary_literal || self.has_hex_literal {
+            source.push('\n');
+        }
+    }
+
+    fn render_helper_defs(&self, source: &mut String, imported_file: bool) {
+        if imported_file {
+            source.push_str("import gen::types::{Pair, Triple};\n\n");
+        }
+
+        if self.has_helper_function || self.has_struct {
+            source.push_str(
+                "const mix_pair = fn (p: Pair) u256 {\n    let a = p.a;\n    let b = @get_field(p, 1);\n    return a +% @evm_xor(b, 0x44);\n};\n\n",
+            );
+        }
+
+        if self.has_helper_function || self.has_tuple {
+            source.push_str(
+                "const make_triple = fn (x: u256, y: u256) Triple {\n    return (x, y, x +% y);\n};\n\n",
+            );
+            source.push_str(
+                "const mix_triple = fn (t: Triple) u256 {\n    let t2 = @set_field(t, 1, @evm_xor(@get_field(t, 1), 0x55));\n    return @get_field(t2, 0) +% @get_field(t2, 1) +% @get_field(t2, 2);\n};\n\n",
+            );
+        }
+
+        if self.has_high_level_operator || self.has_nested_helper_call {
+            source.push_str(
+                "const operator_mix = fn (x: u256, y: u256) u256 {\n    let a = x +% y;\n    let b = a -% (y & 0xff);\n    let c = b *% 3;\n    let d = (c | y) ^ (x & 0xff);\n    let e = (d << 1) >> 1;\n    let inv = ~x;\n    let mut bonus = 11;\n    if x < y {\n        bonus = bonus +% 1;\n    }\n    if x > y {\n        bonus = bonus +% 2;\n    }\n    if x == y {\n        bonus = bonus +% 3;\n    }\n    if !(x != y) {\n        bonus = bonus +% 5;\n    }\n    return e +% inv +% bonus;\n};\n\n",
+            );
+        }
+
+        if self.has_core_ops_operator {
+            source.push_str(
+                "const core_operator_mix = fn (x: u256, y: u256) u256 {\n    let safe_x = x & 0xffff;\n    let safe_y = y & 0xff;\n    let checked_sum = safe_x + safe_y;\n    let checked_diff = checked_sum - safe_y;\n    let checked_mul = checked_diff * 3;\n    let checked_mod = checked_mul % 257;\n    let mut bonus = checked_mod;\n    if checked_diff <= checked_sum {\n        bonus = bonus +% 0x31;\n    }\n    if checked_sum >= checked_diff {\n        bonus = bonus +% 0x32;\n    }\n    return bonus;\n};\n\n",
+            );
+        } else if self.has_helper_function || self.has_import {
+            source.push_str(
+                "const core_operator_mix = fn (x: u256, y: u256) u256 { return x +% y; };\n\n",
+            );
+        }
+
+        if self.has_nested_helper_call {
+            source.push_str(
+                "const nested_mix = fn (x: u256, y: u256) u256 {\n    let t = make_triple(x, y);\n    return operator_mix(mix_triple(t), mix_pair(Pair { a: x, b: y }));\n};\n\n",
+            );
+        } else if self.has_import {
+            source
+                .push_str("const nested_mix = fn (x: u256, y: u256) u256 { return x +% y; };\n\n");
+        }
+    }
+
+    fn render_plank_effects(&self, source: &mut String, entry_index: usize) {
+        if self.has_comments {
+            writeln!(source, "    // frontend feature effects for entry {entry_index}")
+                .expect("writing to a string cannot fail");
+        }
+
+        if self.has_struct {
+            writeln!(
+                source,
+                "    let front_pair_{entry_index} = Pair {{ a: acc, b: @evm_xor(acc, 0x1234) }};"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(source, "    acc = @evm_xor(acc, mix_pair(front_pair_{entry_index}));")
+                .expect("writing to a string cannot fail");
+        }
+
+        if self.has_tuple {
+            writeln!(
+                source,
+                "    let front_tuple_{entry_index} = make_triple(acc, @evm_xor(acc, 0x22));"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(source, "    acc = @evm_xor(acc, mix_triple(front_tuple_{entry_index}));")
+                .expect("writing to a string cannot fail");
+        }
+
+        if self.has_comptime_type_reflection {
+            source
+                .push_str("    if IS_PAIR_STRUCT {\n        acc = @evm_xor(acc, 0x101);\n    }\n");
+            source
+                .push_str("    if IS_TRIPLE_TUPLE {\n        acc = @evm_xor(acc, 0x102);\n    }\n");
+            source.push_str("    if FIELD_A_OK {\n        acc = @evm_xor(acc, 0x103);\n    }\n");
+            source.push_str(
+                "    if FIELD_TYPE_IS_U256 {\n        acc = @evm_xor(acc, 0x104);\n    }\n",
+            );
+            source
+                .push_str("    if CONST_COMPTIME {\n        acc = @evm_xor(acc, 0x105);\n    }\n");
+            source.push_str("    acc = @evm_xor(acc, FIELD_INDEX_B);\n");
+            source.push_str("    acc = @evm_xor(acc, TYPE_INDEX_NUMERIC);\n");
+            source.push_str("    acc = @evm_xor(acc, DEFAULT_PAIR_A);\n");
+            source.push_str("    acc = @evm_xor(acc, ACTIVE_EVM);\n");
+        }
+
+        if self.has_cbytes_builtin {
+            source
+                .push_str("    if CBYTES_SLICE_OK {\n        acc = @evm_xor(acc, 0x201);\n    }\n");
+            source
+                .push_str("    if CBYTES_READ_OK {\n        acc = @evm_xor(acc, 0x202);\n    }\n");
+            source.push_str(
+                "    if CBYTES_CONCAT_OK {\n        acc = @evm_xor(acc, 0x203);\n    }\n",
+            );
+            source.push_str(
+                "    if CBYTES_KECCAK_OK {\n        acc = @evm_xor(acc, 0x204);\n    }\n",
+            );
+            source.push_str("    if CBYTES_SHA_OK {\n        acc = @evm_xor(acc, 0x205);\n    }\n");
+            source.push_str("    acc = @evm_xor(acc, CBYTES_READ_WORD);\n");
+        }
+
+        if self.has_high_level_operator {
+            source.push_str("    acc = @evm_xor(acc, operator_mix(acc, @evm_calldatasize()));\n");
+        }
+
+        if self.has_core_ops_operator {
+            source.push_str(
+                "    acc = @evm_xor(acc, core_operator_mix(acc, @evm_calldatasize()));\n",
+            );
+        }
+
+        if self.has_nested_helper_call {
+            source.push_str("    acc = @evm_xor(acc, nested_mix(acc, @evm_calldatasize()));\n");
+        } else if self.has_helper_function && !(self.has_struct || self.has_tuple) {
+            source.push_str("    acc = @evm_xor(acc, core_operator_mix(acc, 7));\n");
+        }
+
+        if self.has_binary_literal {
+            source.push_str("    acc = @evm_xor(acc, FRONT_BINARY_LITERAL);\n");
+        }
+        if self.has_hex_literal {
+            source.push_str("    acc = @evm_xor(acc, FRONT_HEX_LITERAL);\n");
+        }
+    }
+
+    fn render_yul_effects(&self, source: &mut String, entry_index: usize) {
+        if self.has_comments {
+            writeln!(source, "                // frontend feature effects for entry {entry_index}")
+                .expect("writing to a string cannot fail");
+        }
+
+        if self.has_struct {
+            source.push_str("                {\n");
+            source.push_str("                    let front_a := acc\n");
+            source.push_str("                    let front_b := xor(acc, 0x1234)\n");
+            source.push_str(
+                "                    let front_mix := add(front_a, xor(front_b, 0x44))\n",
+            );
+            source.push_str("                    acc := xor(acc, front_mix)\n");
+            source.push_str("                }\n");
+        }
+
+        if self.has_tuple {
+            source.push_str("                {\n");
+            source.push_str("                    let t0 := acc\n");
+            source.push_str("                    let t1 := xor(acc, 0x22)\n");
+            source.push_str("                    let t2 := add(t0, t1)\n");
+            source.push_str("                    let t1b := xor(t1, 0x55)\n");
+            source.push_str("                    let tuple_mix := add(add(t0, t1b), t2)\n");
+            source.push_str("                    acc := xor(acc, tuple_mix)\n");
+            source.push_str("                }\n");
+        }
+
+        if self.has_comptime_type_reflection {
+            source.push_str("                acc := xor(acc, 0x101)\n");
+            source.push_str("                acc := xor(acc, 0x102)\n");
+            source.push_str("                acc := xor(acc, 0x103)\n");
+            source.push_str("                acc := xor(acc, 0x104)\n");
+            source.push_str("                acc := xor(acc, 0x105)\n");
+            source.push_str("                acc := xor(acc, 1)\n");
+            source.push_str("                acc := xor(acc, 42)\n");
+            source.push_str("                acc := xor(acc, 0)\n");
+            source.push_str("                acc := xor(acc, 13)\n");
+        }
+
+        if self.has_cbytes_builtin {
+            source.push_str("                acc := xor(acc, 0x201)\n");
+            source.push_str("                acc := xor(acc, 0x202)\n");
+            source.push_str("                acc := xor(acc, 0x203)\n");
+            source.push_str("                acc := xor(acc, 0x204)\n");
+            source.push_str("                acc := xor(acc, 0x205)\n");
+            source.push_str("                acc := xor(acc, 0x0203000000000000000000000000000000000000000000000000000000000000)\n");
+        }
+
+        if self.has_high_level_operator {
+            source.push_str(
+                "                acc := xor(acc, yul_operator_mix(acc, calldatasize()))\n",
+            );
+        }
+
+        if self.has_core_ops_operator {
+            source.push_str(
+                "                acc := xor(acc, yul_core_operator_mix(acc, calldatasize()))\n",
+            );
+        }
+
+        if self.has_nested_helper_call {
+            source
+                .push_str("                acc := xor(acc, yul_nested_mix(acc, calldatasize()))\n");
+        } else if self.has_helper_function && !(self.has_struct || self.has_tuple) {
+            source.push_str("                acc := xor(acc, add(acc, 7))\n");
+        }
+
+        if self.has_binary_literal {
+            source.push_str("                acc := xor(acc, 0xa3)\n");
+        }
+        if self.has_hex_literal {
+            source.push_str("                acc := xor(acc, 0xfeed)\n");
+        }
+    }
+
+    fn render_yul_helper_defs(&self, source: &mut String) {
+        if self.has_high_level_operator || self.has_nested_helper_call {
+            source.push_str(
+                "            function yul_operator_mix(x, y) -> out {\n                let a := add(x, y)\n                let b := sub(a, and(y, 0xff))\n                let c := mul(b, 3)\n                let d := xor(or(c, y), and(x, 0xff))\n                let e := shr(1, shl(1, d))\n                let inv := not(x)\n                let bonus := 11\n                if lt(x, y) { bonus := add(bonus, 1) }\n                if gt(x, y) { bonus := add(bonus, 2) }\n                if eq(x, y) { bonus := add(bonus, 3) }\n                if eq(x, y) { bonus := add(bonus, 5) }\n                out := add(add(e, inv), bonus)\n            }\n",
+            );
+        }
+
+        if self.has_core_ops_operator {
+            source.push_str(
+                "            function yul_core_operator_mix(x, y) -> out {\n                let safe_x := and(x, 0xffff)\n                let safe_y := and(y, 0xff)\n                let checked_sum := add(safe_x, safe_y)\n                let checked_diff := sub(checked_sum, safe_y)\n                let checked_mul := mul(checked_diff, 3)\n                let checked_mod := mod(checked_mul, 257)\n                let bonus := checked_mod\n                if iszero(gt(checked_diff, checked_sum)) { bonus := add(bonus, 0x31) }\n                if iszero(lt(checked_sum, checked_diff)) { bonus := add(bonus, 0x32) }\n                out := bonus\n            }\n",
+            );
+        }
+
+        if self.has_nested_helper_call {
+            source.push_str(
+                "            function yul_nested_mix(x, y) -> out {\n                let t2 := add(x, y)\n                let tuple_mix := add(add(x, xor(y, 0x55)), t2)\n                let pair_mix := add(x, xor(y, 0x44))\n                out := yul_operator_mix(tuple_mix, pair_mix)\n            }\n",
+            );
+        }
+    }
+
+    fn classify(&self, classification: &mut SeedClassification) {
+        classification.has_struct |= self.has_struct;
+        classification.has_tuple |= self.has_tuple;
+        classification.has_compound_literal |= self.has_struct || self.has_tuple;
+        classification.has_field_access |= self.has_struct || self.has_tuple;
+        classification.has_field_update |= self.has_tuple;
+        classification.has_comptime_type_reflection |= self.has_comptime_type_reflection;
+        classification.has_cbytes_builtin |= self.has_cbytes_builtin;
+        classification.has_high_level_operator |= self.has_high_level_operator;
+        classification.has_core_ops_operator |= self.has_core_ops_operator;
+        classification.has_helper_function |= self.has_helper_function;
+        classification.has_nested_helper_call |= self.has_nested_helper_call;
+        classification.has_import |= self.has_import;
+        classification.has_comments |= self.has_comments;
+        classification.has_binary_literal |= self.has_binary_literal;
+        classification.has_hex_literal |= self.has_hex_literal;
+        classification.has_std_registered |= self.has_core_ops_operator;
+    }
+
+    fn needs_compound_defs(&self) -> bool {
+        self.has_struct
+            || self.has_tuple
+            || self.has_comptime_type_reflection
+            || self.has_helper_function
+            || self.has_nested_helper_call
+            || self.has_import
     }
 }
 
@@ -763,7 +1227,13 @@ fn render_plank_dispatch(
     writeln!(source, "{indent}}}").expect("writing to a string cannot fail");
 }
 
-fn render_plank_entry(source: &mut String, entry_index: usize, entry: &Entry, mode: ProgramMode) {
+fn render_plank_entry(
+    source: &mut String,
+    entry_index: usize,
+    entry: &Entry,
+    mode: ProgramMode,
+    frontend: &FrontendPlan,
+) {
     writeln!(source, "const entry_{entry_index} = fn () never {{")
         .expect("writing to a string cannot fail");
     writeln!(source, "    let scratch = @malloc_zeroed({SCRATCH_BYTES});")
@@ -775,6 +1245,7 @@ fn render_plank_entry(source: &mut String, entry_index: usize, entry: &Entry, mo
         entry.config.constants.expr(0)
     )
     .expect("writing to a string cannot fail");
+    frontend.render_plank_effects(source, entry_index);
 
     for (fragment_index, fragment) in entry.config.fragments.iter().enumerate() {
         render_plank_fragment(source, entry_index, fragment_index, fragment, &entry.config);
@@ -1192,7 +1663,13 @@ fn render_plank_output(source: &mut String, len: usize, cfg: &EntryConfig, inden
     }
 }
 
-fn render_yul_entry(source: &mut String, entry_index: usize, entry: &Entry, mode: ProgramMode) {
+fn render_yul_entry(
+    source: &mut String,
+    entry_index: usize,
+    entry: &Entry,
+    mode: ProgramMode,
+    frontend: &FrontendPlan,
+) {
     writeln!(source, "            function entry_{entry_index}() {{")
         .expect("writing to a string cannot fail");
     writeln!(source, "                let scratch := mload(0x40)")
@@ -1206,6 +1683,7 @@ fn render_yul_entry(source: &mut String, entry_index: usize, entry: &Entry, mode
         entry.config.constants.expr(0)
     )
     .expect("writing to a string cannot fail");
+    frontend.render_yul_effects(source, entry_index);
 
     for (fragment_index, fragment) in entry.config.fragments.iter().enumerate() {
         render_yul_fragment(source, entry_index, fragment_index, fragment, &entry.config);
@@ -1765,9 +2243,10 @@ fn hex_u64(value: u64) -> String {
 mod tests {
     use super::{
         CallStep, ConstantPool, CreateKind, Entry, EntryConfig, ExitConfig, ExitKind, Fragment,
-        GeneratedCase, ProgramMode,
+        FrontendPlan, GeneratedCase, ProgramMode,
     };
     use arbitrary::{Arbitrary, Unstructured};
+    use plank_driver::BackendKind;
 
     #[test]
     fn generated_case_renders_rich_plank_and_solidity_sources() {
@@ -1812,6 +2291,7 @@ mod tests {
                 },
             }],
             calls: vec![CallStep { selected_entry: 0, payload: Vec::new() }],
+            frontend: Default::default(),
         };
 
         let plank = case.plank_source();
@@ -1828,5 +2308,77 @@ mod tests {
         assert!(solidity.contains(
             "let created_0 := create2(0, add(scratch, 960), 13, xor(0x0, create_nonce_0))"
         ));
+    }
+
+    #[test]
+    fn frontend_feature_case_uses_source_set_imports_and_std() {
+        let case = frontend_feature_case();
+        let sources = case.plank_sources();
+
+        assert_eq!(sources.files.len(), 3);
+        assert_eq!(sources.std_mode, crate::StdMode::RepoStd);
+        assert!(sources.to_string().contains("== gen/types.plk =="));
+        assert!(sources.to_string().contains("import gen::types"));
+    }
+
+    #[test]
+    fn frontend_feature_case_compiles_plank() {
+        let case = frontend_feature_case();
+
+        crate::compiler::plank::compile_plank_sources(
+            &case.plank_sources(),
+            BackendKind::SirDebug,
+            None,
+        )
+        .unwrap_or_else(|err| {
+            panic!("feature case did not compile:\n{err}\n\n{}", case.plank_sources())
+        });
+    }
+
+    #[test]
+    #[ignore = "requires RAPPIE_SOL_SOLX, SOLX_PATH, or solx on PATH"]
+    fn frontend_feature_case_compares_plank_solidity() {
+        let case = frontend_feature_case();
+        crate::compare_source_set(
+            &case.plank_sources(),
+            &case.solidity_source(),
+            &case.calldatas(),
+        )
+        .unwrap_or_else(|err| {
+            panic!(
+                "feature case did not compare: {err}\n\nPlank:\n{}\nSolidity:\n{}",
+                case.plank_sources(),
+                case.solidity_source()
+            )
+        });
+    }
+
+    fn frontend_feature_case() -> GeneratedCase {
+        GeneratedCase {
+            mode: ProgramMode::RawFallback,
+            entries: vec![Entry {
+                selector: 0,
+                config: EntryConfig {
+                    fragments: Vec::new(),
+                    exit: ExitConfig { kind: ExitKind::Stop, output_len: 0 },
+                    constants: ConstantPool { words: [[0; 32]; 4] },
+                },
+            }],
+            calls: vec![CallStep { selected_entry: 0, payload: Vec::new() }],
+            frontend: FrontendPlan {
+                has_struct: true,
+                has_tuple: true,
+                has_comptime_type_reflection: true,
+                has_cbytes_builtin: true,
+                has_high_level_operator: true,
+                has_core_ops_operator: true,
+                has_helper_function: true,
+                has_nested_helper_call: true,
+                has_import: true,
+                has_comments: true,
+                has_binary_literal: true,
+                has_hex_literal: true,
+            },
+        }
     }
 }

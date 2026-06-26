@@ -10,12 +10,14 @@ use revm as _;
 use serde_json as _;
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
-    env, fs, io,
+    env,
+    fmt::Write,
+    fs, io,
     path::{Path, PathBuf},
     process::ExitCode,
 };
 
-const DEFAULT_TARGET: usize = 96;
+const DEFAULT_TARGET: usize = 160;
 const DEFAULT_CANDIDATE_LIMIT: usize = 300_000;
 const DEFAULT_OUTPUT_DIR: &str = "fuzz/seeds/plank_sol_program_diff";
 const SIZES: [usize; 7] = [128, 256, 512, 1024, 2048, 4096, 8192];
@@ -56,6 +58,22 @@ const ALL_BUCKETS: &[Bucket] = &[
     Bucket::StorageAndMultiCall,
     Bucket::CallAndReturndata,
     Bucket::CreateAndExternalCode,
+    Bucket::Struct,
+    Bucket::Tuple,
+    Bucket::CompoundLiteral,
+    Bucket::FieldAccess,
+    Bucket::FieldUpdate,
+    Bucket::ComptimeTypeReflection,
+    Bucket::CBytesBuiltin,
+    Bucket::HighLevelOperator,
+    Bucket::CoreOpsOperator,
+    Bucket::HelperFunction,
+    Bucket::NestedHelperCall,
+    Bucket::Import,
+    Bucket::Comments,
+    Bucket::BinaryLiteral,
+    Bucket::HexLiteral,
+    Bucket::StdRegistered,
 ];
 
 fn main() -> ExitCode {
@@ -158,6 +176,8 @@ fn run() -> Result<(), String> {
 
     rewrite_seed_dir(&config.output_dir, &selected)
         .map_err(|err| format!("failed to write seeds: {err}"))?;
+    write_manifest(&config.output_dir, &selected)
+        .map_err(|err| format!("failed to write seed manifest: {err}"))?;
 
     println!(
         "wrote {} seeds to {} from {} generated candidates ({} decoded, {} verified, {} rejected)",
@@ -257,12 +277,12 @@ struct ComboKey {
     call_count: usize,
     exit_kind: SeedExitKind,
     max_log_topics: usize,
-    flags: u32,
+    flags: u128,
 }
 
 impl From<SeedClassification> for ComboKey {
     fn from(classification: SeedClassification) -> Self {
-        let mut flags = 0u32;
+        let mut flags = 0u128;
         let bools = [
             classification.touches_multiple_entries,
             classification.has_short_calldata,
@@ -285,11 +305,27 @@ impl From<SeedClassification> for ComboKey {
             classification.has_log,
             classification.has_branch,
             classification.has_loop,
+            classification.has_struct,
+            classification.has_tuple,
+            classification.has_compound_literal,
+            classification.has_field_access,
+            classification.has_field_update,
+            classification.has_comptime_type_reflection,
+            classification.has_cbytes_builtin,
+            classification.has_high_level_operator,
+            classification.has_core_ops_operator,
+            classification.has_helper_function,
+            classification.has_nested_helper_call,
+            classification.has_import,
+            classification.has_comments,
+            classification.has_binary_literal,
+            classification.has_hex_literal,
+            classification.has_std_registered,
         ];
 
         for (index, active) in bools.into_iter().enumerate() {
             if active {
-                flags |= 1 << index;
+                flags |= 1u128 << index;
             }
         }
 
@@ -341,6 +377,22 @@ enum Bucket {
     StorageAndMultiCall,
     CallAndReturndata,
     CreateAndExternalCode,
+    Struct,
+    Tuple,
+    CompoundLiteral,
+    FieldAccess,
+    FieldUpdate,
+    ComptimeTypeReflection,
+    CBytesBuiltin,
+    HighLevelOperator,
+    CoreOpsOperator,
+    HelperFunction,
+    NestedHelperCall,
+    Import,
+    Comments,
+    BinaryLiteral,
+    HexLiteral,
+    StdRegistered,
     ComboExtra,
 }
 
@@ -471,6 +523,54 @@ fn buckets_for(classification: &SeedClassification) -> Vec<Bucket> {
     {
         buckets.push(Bucket::CreateAndExternalCode);
     }
+    if classification.has_struct {
+        buckets.push(Bucket::Struct);
+    }
+    if classification.has_tuple {
+        buckets.push(Bucket::Tuple);
+    }
+    if classification.has_compound_literal {
+        buckets.push(Bucket::CompoundLiteral);
+    }
+    if classification.has_field_access {
+        buckets.push(Bucket::FieldAccess);
+    }
+    if classification.has_field_update {
+        buckets.push(Bucket::FieldUpdate);
+    }
+    if classification.has_comptime_type_reflection {
+        buckets.push(Bucket::ComptimeTypeReflection);
+    }
+    if classification.has_cbytes_builtin {
+        buckets.push(Bucket::CBytesBuiltin);
+    }
+    if classification.has_high_level_operator {
+        buckets.push(Bucket::HighLevelOperator);
+    }
+    if classification.has_core_ops_operator {
+        buckets.push(Bucket::CoreOpsOperator);
+    }
+    if classification.has_helper_function {
+        buckets.push(Bucket::HelperFunction);
+    }
+    if classification.has_nested_helper_call {
+        buckets.push(Bucket::NestedHelperCall);
+    }
+    if classification.has_import {
+        buckets.push(Bucket::Import);
+    }
+    if classification.has_comments {
+        buckets.push(Bucket::Comments);
+    }
+    if classification.has_binary_literal {
+        buckets.push(Bucket::BinaryLiteral);
+    }
+    if classification.has_hex_literal {
+        buckets.push(Bucket::HexLiteral);
+    }
+    if classification.has_std_registered {
+        buckets.push(Bucket::StdRegistered);
+    }
 
     buckets
 }
@@ -554,6 +654,22 @@ fn bucket_name(bucket: Bucket) -> &'static str {
         Bucket::StorageAndMultiCall => "storage_multi_call",
         Bucket::CallAndReturndata => "call_returndata",
         Bucket::CreateAndExternalCode => "create_external_code",
+        Bucket::Struct => "struct",
+        Bucket::Tuple => "tuple",
+        Bucket::CompoundLiteral => "compound_literal",
+        Bucket::FieldAccess => "field_access",
+        Bucket::FieldUpdate => "field_update",
+        Bucket::ComptimeTypeReflection => "comptime_type_reflection",
+        Bucket::CBytesBuiltin => "cbytes_builtin",
+        Bucket::HighLevelOperator => "high_level_operator",
+        Bucket::CoreOpsOperator => "core_ops_operator",
+        Bucket::HelperFunction => "helper_function",
+        Bucket::NestedHelperCall => "nested_helper_call",
+        Bucket::Import => "import",
+        Bucket::Comments => "comments",
+        Bucket::BinaryLiteral => "binary_literal",
+        Bucket::HexLiteral => "hex_literal",
+        Bucket::StdRegistered => "std_registered",
         Bucket::ComboExtra => "combo",
     }
 }
@@ -694,6 +810,29 @@ fn rewrite_seed_dir(output_dir: &Path, selected: &[SelectedSeed]) -> io::Result<
     }
 
     Ok(())
+}
+
+fn write_manifest(output_dir: &Path, selected: &[SelectedSeed]) -> io::Result<()> {
+    let manifest_path = output_dir.with_extension("manifest.txt");
+    let mut manifest = String::new();
+    writeln!(&mut manifest, "seed_count={}\noutput_dir={}\n", selected.len(), output_dir.display())
+        .expect("writing to string cannot fail");
+
+    for seed in selected {
+        writeln!(
+            &mut manifest,
+            "{}: buckets={:?}; mode={:?}; entries={}; calls={}; exit={:?}",
+            seed.name,
+            seed.buckets,
+            seed.classification.mode,
+            seed.classification.entry_count,
+            seed.classification.call_count,
+            seed.classification.exit_kind
+        )
+        .expect("writing to string cannot fail");
+    }
+
+    fs::write(manifest_path, manifest)
 }
 
 #[derive(Debug, Clone, Copy)]

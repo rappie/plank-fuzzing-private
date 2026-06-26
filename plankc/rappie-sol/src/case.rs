@@ -1,4 +1,7 @@
-use crate::generator::{GeneratedCase, SeedClassification};
+use crate::{
+    generator::{GeneratedCase, SeedClassification},
+    sources::PlankSourceSet,
+};
 use arbitrary::{Arbitrary, Unstructured};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,6 +12,14 @@ pub struct FuzzCase {
 impl FuzzCase {
     pub fn plank_source(&self) -> String {
         self.generated.plank_source()
+    }
+
+    pub fn plank_sources(&self) -> PlankSourceSet {
+        self.generated.plank_sources()
+    }
+
+    pub fn plank_sources_display(&self) -> String {
+        self.plank_sources().to_string()
     }
 
     pub fn solidity_source(&self) -> String {
@@ -84,9 +95,9 @@ mod tests {
         for (name, case) in committed_seed_cases() {
             crate::compare_plank_solidity(&case).unwrap_or_else(|err| {
                 panic!(
-                    "{name} did not compare successfully: {err}\n\ncalldatas:\n{}\n\nPlank source:\n{}\nSolidity source:\n{}",
+                    "{name} did not compare successfully: {err}\n\ncalldatas:\n{}\n\nPlank sources:\n{}\nSolidity source:\n{}",
                     hex_encode_all(&case.calldatas()),
-                    case.plank_source(),
+                    case.plank_sources_display(),
                     case.solidity_source()
                 )
             });

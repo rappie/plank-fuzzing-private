@@ -5,12 +5,12 @@ use rappie_sol::{FuzzCase, compare_plank_solidity};
 
 fuzz_target!(|case: FuzzCase| {
     if let Err(err) = compare_plank_solidity(&case) {
-        let plank_source = case.plank_source();
+        let plank_sources = case.plank_sources_display();
         let solidity_source = case.solidity_source();
         let calldatas = case.calldatas();
 
         panic!(
-            "Plank/Solidity mismatch:\n{err}\n\ncalldatas:\n{}\n\ncase: {case:#?}\n\nPlank source:\n{plank_source}\n\nSolidity source:\n{solidity_source}",
+            "Plank/Solidity mismatch:\n{err}\n\ncalldatas:\n{}\n\ncase: {case:#?}\n\nPlank sources:\n{plank_sources}\n\nSolidity source:\n{solidity_source}",
             hex_encode_all(&calldatas)
         );
     }

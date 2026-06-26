@@ -46,7 +46,7 @@ corpus reach valid structured programs immediately.
 Regenerate the tracked seed corpus after generator changes:
 
 ```bash
-RAPPIE_SOL_SOLX=/path/to/solx cargo run --bin seedgen -- --target 96
+RAPPIE_SOL_SOLX=/path/to/solx cargo run --bin seedgen -- --target 160
 ```
 
 `seedgen` decodes deterministic candidate byte buffers, buckets the resulting
@@ -75,9 +75,14 @@ Balances and gas are not currently oracle outputs.
 ## Generated Programs
 
 The generator emits bounded programs that can run under `-fork=12` without shared
-compiler artifacts. Each case may use raw fallback calldata or selector dispatch
-with one to six entries, then executes one to four selected calls. Executed
-entries combine:
+compiler artifacts. Each case renders a Plank source set and one Solidity/Yul
+oracle from the same structured case. Generated Plank may be a single `main.plk`
+or a multi-file in-memory project using the registered `gen` module. Cases that
+exercise core-operator lowering load the repo `std/` tree into the same in-memory
+filesystem and register it as `std`.
+
+Each case may use raw fallback calldata or selector dispatch with one to six
+entries, then executes one to four selected calls. Executed entries combine:
 
 - multi-word returns plus non-32-byte return/revert data
 - short, unaligned, and copied calldata
@@ -96,3 +101,14 @@ entries combine:
 - external code size/hash/copy for deterministic helper and empty accounts
 - signed arithmetic, signed comparisons, and signed shifts
 - edge constants such as zero, one, byte masks, signed min/max, and `u256::MAX`
+- imported helper files and grouped imports
+- generated structs, tuples, compound literals, field reads, and field updates
+- comptime type reflection builtins such as `@field_count`, `@field_name`,
+  `@field_type`, `@type_index`, `@uninit`, `@in_comptime`, and
+  `@active_evm_version`
+- cbytes/string builtins such as `@slice_cbytes`, `@padded_read_cbytes`,
+  `@concat_cbytes`, `@keccak256_cbytes`, and `@sha256_cbytes`
+- high-level wrapping, comparison, shift, equality, bitwise, and unary operators
+- std-backed checked operators when core ops are registered
+- normal and nested helper functions over primitive and compound values
+- comments, whitespace, binary literals, and hex literals
