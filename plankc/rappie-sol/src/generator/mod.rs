@@ -89,9 +89,23 @@ pub struct SeedClassification {
     pub has_helper_function: bool,
     pub has_nested_helper_call: bool,
     pub has_import: bool,
+    pub has_import_single: bool,
+    pub has_import_group: bool,
+    pub has_import_alias: bool,
+    pub has_import_glob: bool,
+    pub has_deep_import: bool,
     pub has_comments: bool,
     pub has_binary_literal: bool,
     pub has_hex_literal: bool,
+    pub has_parameterized_type: bool,
+    pub has_comptime_control_flow: bool,
+    pub has_comptime_loop: bool,
+    pub has_type_dependent_branch: bool,
+    pub has_function_returns_compound: bool,
+    pub has_function_early_return: bool,
+    pub has_nested_compound: bool,
+    pub has_runtime_uninit: bool,
+    pub has_data_offset: bool,
     pub has_std_registered: bool,
 }
 
@@ -143,6 +157,24 @@ impl GeneratedCase {
             files.push(PlankSourceFile::new("gen/types.plk", self.frontend.render_types_file()));
             files
                 .push(PlankSourceFile::new("gen/helpers.plk", self.frontend.render_helpers_file()));
+            if self.frontend.has_import_single || self.frontend.has_import_alias {
+                files.push(PlankSourceFile::new(
+                    "gen/extras.plk",
+                    self.frontend.render_extras_file(),
+                ));
+            }
+            if self.frontend.has_import_glob {
+                files.push(PlankSourceFile::new(
+                    "gen/glob_helpers.plk",
+                    self.frontend.render_glob_helpers_file(),
+                ));
+            }
+            if self.frontend.has_deep_import {
+                files.push(PlankSourceFile::new(
+                    "gen/nested/boxes.plk",
+                    self.frontend.render_nested_boxes_file(),
+                ));
+            }
         }
 
         PlankSourceSet {
@@ -271,9 +303,23 @@ impl GeneratedCase {
             has_helper_function: false,
             has_nested_helper_call: false,
             has_import: false,
+            has_import_single: false,
+            has_import_group: false,
+            has_import_alias: false,
+            has_import_glob: false,
+            has_deep_import: false,
             has_comments: false,
             has_binary_literal: false,
             has_hex_literal: false,
+            has_parameterized_type: false,
+            has_comptime_control_flow: false,
+            has_comptime_loop: false,
+            has_type_dependent_branch: false,
+            has_function_returns_compound: false,
+            has_function_early_return: false,
+            has_nested_compound: false,
+            has_runtime_uninit: false,
+            has_data_offset: false,
             has_std_registered: false,
         };
 
@@ -351,14 +397,27 @@ struct FrontendPlan {
     has_helper_function: bool,
     has_nested_helper_call: bool,
     has_import: bool,
+    has_import_single: bool,
+    has_import_alias: bool,
+    has_import_glob: bool,
+    has_deep_import: bool,
     has_comments: bool,
     has_binary_literal: bool,
     has_hex_literal: bool,
+    has_parameterized_type: bool,
+    has_comptime_control_flow: bool,
+    has_comptime_loop: bool,
+    has_type_dependent_branch: bool,
+    has_function_returns_compound: bool,
+    has_function_early_return: bool,
+    has_nested_compound: bool,
+    has_runtime_uninit: bool,
+    has_data_offset: bool,
 }
 
 impl FrontendPlan {
     fn arbitrary(u: &mut Unstructured<'_>) -> arbitrary::Result<Self> {
-        let mask = u.int_in_range(0u16..=0x0fff)?;
+        let mask = u.int_in_range(0u32..=0x01ff_ffff)?;
         let mut plan = Self {
             has_struct: mask & (1 << 0) != 0,
             has_tuple: mask & (1 << 1) != 0,
@@ -369,15 +428,38 @@ impl FrontendPlan {
             has_helper_function: mask & (1 << 6) != 0,
             has_nested_helper_call: mask & (1 << 7) != 0,
             has_import: mask & (1 << 8) != 0,
-            has_comments: mask & (1 << 9) != 0,
-            has_binary_literal: mask & (1 << 10) != 0,
-            has_hex_literal: mask & (1 << 11) != 0,
+            has_import_single: mask & (1 << 9) != 0,
+            has_import_alias: mask & (1 << 10) != 0,
+            has_import_glob: mask & (1 << 11) != 0,
+            has_deep_import: mask & (1 << 12) != 0,
+            has_comments: mask & (1 << 13) != 0,
+            has_binary_literal: mask & (1 << 14) != 0,
+            has_hex_literal: mask & (1 << 15) != 0,
+            has_parameterized_type: mask & (1 << 16) != 0,
+            has_comptime_control_flow: mask & (1 << 17) != 0,
+            has_comptime_loop: mask & (1 << 18) != 0,
+            has_type_dependent_branch: mask & (1 << 19) != 0,
+            has_function_returns_compound: mask & (1 << 20) != 0,
+            has_function_early_return: mask & (1 << 21) != 0,
+            has_nested_compound: mask & (1 << 22) != 0,
+            has_runtime_uninit: mask & (1 << 23) != 0,
+            has_data_offset: mask & (1 << 24) != 0,
         };
 
+        if plan.has_import_single
+            || plan.has_import_alias
+            || plan.has_import_glob
+            || plan.has_deep_import
+        {
+            plan.has_import = true;
+        }
         if plan.has_import {
             plan.has_struct = true;
             plan.has_tuple = true;
             plan.has_helper_function = true;
+        }
+        if plan.has_deep_import {
+            plan.has_import_alias = true;
         }
         if plan.has_nested_helper_call {
             plan.has_helper_function = true;
@@ -387,7 +469,34 @@ impl FrontendPlan {
             plan.has_struct = true;
             plan.has_tuple = true;
         }
+        if plan.has_parameterized_type {
+            plan.has_struct = true;
+            plan.has_tuple = true;
+        }
+        if plan.has_comptime_loop || plan.has_type_dependent_branch {
+            plan.has_comptime_control_flow = true;
+        }
+        if plan.has_type_dependent_branch {
+            plan.has_struct = true;
+            plan.has_tuple = true;
+            plan.has_comptime_type_reflection = true;
+        }
+        if plan.has_function_returns_compound {
+            plan.has_struct = true;
+            plan.has_tuple = true;
+            plan.has_helper_function = true;
+        }
+        if plan.has_nested_compound {
+            plan.has_struct = true;
+            plan.has_tuple = true;
+        }
+        if plan.has_runtime_uninit {
+            plan.has_struct = true;
+        }
         if plan.has_cbytes_builtin {
+            plan.has_hex_literal = true;
+        }
+        if plan.has_data_offset {
             plan.has_hex_literal = true;
         }
 
@@ -401,12 +510,94 @@ impl FrontendPlan {
         }
 
         if self.has_import {
-            source.push_str(
-                "import gen::types::{Pair, Triple, Numeric, IS_PAIR_STRUCT, IS_TRIPLE_TUPLE, FIELD_A_OK, FIELD_INDEX_B, FIELD_TYPE_IS_U256, TYPE_INDEX_NUMERIC, DEFAULT_PAIR_A, ACTIVE_EVM, CONST_COMPTIME, CBYTES_SLICE_OK, CBYTES_READ_WORD, CBYTES_READ_OK, CBYTES_CONCAT_OK, CBYTES_KECCAK_OK, CBYTES_SHA_OK, FRONT_BINARY_LITERAL, FRONT_HEX_LITERAL};\n",
-            );
-            source.push_str(
-                "import gen::helpers::{mix_pair, make_triple, mix_triple, operator_mix, core_operator_mix, nested_mix};\n\n",
-            );
+            let mut type_imports = vec![
+                "Pair",
+                "Triple",
+                "Numeric",
+                "IS_PAIR_STRUCT",
+                "IS_TRIPLE_TUPLE",
+                "FIELD_A_OK",
+                "FIELD_INDEX_B",
+                "FIELD_TYPE_IS_U256",
+                "TYPE_INDEX_NUMERIC",
+                "DEFAULT_PAIR_A",
+                "ACTIVE_EVM",
+                "CONST_COMPTIME",
+                "CBYTES_SLICE_OK",
+                "CBYTES_READ_WORD",
+                "CBYTES_READ_OK",
+                "CBYTES_CONCAT_OK",
+                "CBYTES_KECCAK_OK",
+                "CBYTES_SHA_OK",
+                "FRONT_BINARY_LITERAL",
+                "FRONT_HEX_LITERAL",
+            ];
+            if self.has_parameterized_type {
+                type_imports.extend([
+                    "BoxU256",
+                    "BoxPair",
+                    "BoxTriple",
+                    "BOX_U256_PARAMETERIZED",
+                    "BOX_U256_NAME_OK",
+                    "BOX_U256_FIELD_TYPE_OK",
+                    "BOX_PAIR_FIELD_COUNT",
+                ]);
+            }
+            if self.has_comptime_control_flow {
+                type_imports.push("FRONT_COMPTIME_BRANCH_VALUE");
+            }
+            if self.has_comptime_loop {
+                type_imports.push("FRONT_COMPTIME_LOOP_VALUE");
+            }
+            if self.has_type_dependent_branch {
+                type_imports.extend(["FRONT_PAIR_TYPE_SCORE", "FRONT_TRIPLE_TYPE_SCORE"]);
+            }
+            if self.has_nested_compound {
+                type_imports.extend(["NestedOuter", "NestedTuple"]);
+            }
+            if self.has_runtime_uninit {
+                type_imports.push("RuntimeScratch");
+            }
+            writeln!(source, "import gen::types::{{{}}};", type_imports.join(", "))
+                .expect("writing to a string cannot fail");
+
+            let mut helper_imports = vec![
+                "mix_pair",
+                "make_triple",
+                "mix_triple",
+                "operator_mix",
+                "core_operator_mix",
+                "nested_mix",
+            ];
+            if self.has_function_early_return {
+                helper_imports.push("choose_front_value");
+            }
+            if self.has_function_returns_compound {
+                helper_imports.extend(["make_front_pair", "make_front_triple"]);
+            }
+            if self.has_function_returns_compound && self.has_nested_compound {
+                helper_imports.push("make_front_outer");
+            }
+            writeln!(source, "import gen::helpers::{{{}}};", helper_imports.join(", "))
+                .expect("writing to a string cannot fail");
+
+            if self.has_import_single {
+                source.push_str("import gen::extras::SINGLE_IMPORT_MARKER;\n");
+            }
+            if self.has_import_alias {
+                source.push_str(
+                    "import gen::extras::ALIAS_IMPORT_MARKER as ALIASED_IMPORT_MARKER;\n",
+                );
+            }
+            if self.has_import_glob {
+                source.push_str("import gen::glob_helpers::*;\n");
+            }
+            if self.has_deep_import {
+                source.push_str(
+                    "import gen::nested::boxes::{DeepBoxU256 as ImportedBoxU256, nested_box_value as imported_box_value};\n",
+                );
+            }
+            source.push('\n');
         } else {
             self.render_type_defs(source);
             self.render_helper_defs(source, false);
@@ -431,12 +622,72 @@ impl FrontendPlan {
         source
     }
 
+    fn render_extras_file(&self) -> String {
+        let mut source = String::new();
+        if self.has_comments {
+            source.push_str("// Generated direct and alias import definitions.\n");
+        }
+        source.push_str("const SINGLE_IMPORT_MARKER = 0x401;\n");
+        source.push_str("const ALIAS_IMPORT_MARKER = 0x402;\n");
+        source
+    }
+
+    fn render_glob_helpers_file(&self) -> String {
+        let mut source = String::new();
+        if self.has_comments {
+            source.push_str("// Generated glob import definitions.\n");
+        }
+        source.push_str("const GLOB_IMPORT_MARKER = 0x403;\n");
+        source.push_str(
+            "const glob_import_mix = fn (x: u256) u256 { return x +% GLOB_IMPORT_MARKER; };\n",
+        );
+        source
+    }
+
+    fn render_nested_boxes_file(&self) -> String {
+        let mut source = String::new();
+        if self.has_comments {
+            source.push_str("// Generated nested import definitions.\n");
+        }
+        source.push_str(
+            "const DeepBox = fn (comptime T: type) type {\n    struct { value: T }\n};\n",
+        );
+        source.push_str("const DeepBoxU256 = DeepBox(u256);\n");
+        source.push_str(
+            "const nested_box_value = fn (item: DeepBoxU256) u256 { return item.value; };\n",
+        );
+        source
+    }
+
     fn render_type_defs(&self, source: &mut String) {
         if self.needs_compound_defs() {
             source.push_str("const Pair = struct { a: u256, b: u256 };\n");
             source.push_str("const Triple = tuple { u256, u256, u256 };\n");
             source.push_str("const Numeric = struct 42 { a: u256 };\n");
+            if self.has_nested_compound {
+                source.push_str(
+                    "const NestedOuter = struct { pair: Pair, triple: Triple, flag: bool };\n",
+                );
+                source
+                    .push_str("const NestedTuple = tuple { Pair, tuple { u256, u256 }, u256 };\n");
+            }
+            if self.has_runtime_uninit {
+                source.push_str("const RuntimeScratch = struct { ptr: memptr, len: u256 };\n");
+            }
             source.push('\n');
+        }
+
+        if self.has_parameterized_type {
+            source.push_str(
+                "const Box = fn (comptime T: type) type {\n    struct { value: T }\n};\n",
+            );
+            source.push_str("const BoxU256 = Box(u256);\n");
+            source.push_str("const BoxPair = Box(Pair);\n");
+            source.push_str("const BoxTriple = Box(Triple);\n");
+            source.push_str("const BOX_U256_PARAMETERIZED = @has_parameterized_name(BoxU256);\n");
+            source.push_str("const BOX_U256_NAME_OK = @type_name(BoxU256) == \"Box(u256)\";\n");
+            source.push_str("const BOX_U256_FIELD_TYPE_OK = @field_type(BoxU256, 0) == u256;\n");
+            source.push_str("const BOX_PAIR_FIELD_COUNT = @field_count(BoxPair);\n\n");
         }
 
         if self.has_comptime_type_reflection {
@@ -460,6 +711,44 @@ impl FrontendPlan {
             source.push_str("const DEFAULT_PAIR_A = 0;\n");
             source.push_str("const ACTIVE_EVM = 13;\n");
             source.push_str("const CONST_COMPTIME = true;\n\n");
+        }
+
+        if self.has_comptime_control_flow {
+            source.push_str("const FRONT_COMPTIME_BRANCH_VALUE = comptime {\n");
+            source.push_str("    let mut value = 0;\n");
+            source.push_str("    if @is_struct(Pair) {\n");
+            source.push_str("        value = value +% 0x501;\n");
+            source.push_str("    } else {\n");
+            source.push_str("        value = value +% 0x502;\n");
+            source.push_str("    }\n");
+            source.push_str("    value\n");
+            source.push_str("};\n\n");
+        }
+
+        if self.has_comptime_loop {
+            source.push_str("const FRONT_COMPTIME_LOOP_VALUE = comptime {\n");
+            source.push_str("    let mut i = 0;\n");
+            source.push_str("    let mut value = 0;\n");
+            source.push_str("    while i < 4 {\n");
+            source.push_str("        value = value +% i;\n");
+            source.push_str("        i = i +% 1;\n");
+            source.push_str("    }\n");
+            source.push_str("    value\n");
+            source.push_str("};\n\n");
+        }
+
+        if self.has_type_dependent_branch {
+            source.push_str("const front_type_score = fn (comptime T: type) u256 {\n");
+            source.push_str("    if @is_struct(T) {\n");
+            source.push_str("        return @field_count(T) +% 10;\n");
+            source.push_str("    }\n");
+            source.push_str("    if @is_tuple(T) {\n");
+            source.push_str("        return @field_count(T) +% 20;\n");
+            source.push_str("    }\n");
+            source.push_str("    return 0;\n");
+            source.push_str("};\n");
+            source.push_str("const FRONT_PAIR_TYPE_SCORE = front_type_score(Pair);\n");
+            source.push_str("const FRONT_TRIPLE_TYPE_SCORE = front_type_score(Triple);\n\n");
         }
 
         if self.has_cbytes_builtin {
@@ -495,7 +784,11 @@ impl FrontendPlan {
 
     fn render_helper_defs(&self, source: &mut String, imported_file: bool) {
         if imported_file {
-            source.push_str("import gen::types::{Pair, Triple};\n\n");
+            if self.has_nested_compound {
+                source.push_str("import gen::types::{Pair, Triple, NestedOuter};\n\n");
+            } else {
+                source.push_str("import gen::types::{Pair, Triple};\n\n");
+            }
         }
 
         if self.has_helper_function || self.has_struct {
@@ -540,6 +833,26 @@ impl FrontendPlan {
         } else if self.has_import {
             source
                 .push_str("const nested_mix = fn (x: u256, y: u256) u256 { return x +% y; };\n\n");
+        }
+
+        if self.has_function_early_return {
+            source.push_str(
+                "const choose_front_value = fn (cond: bool, a: u256, b: u256) u256 {\n    if cond {\n        return a;\n    }\n    return b;\n};\n\n",
+            );
+        }
+
+        if self.has_function_returns_compound {
+            source.push_str(
+                "const make_front_pair = fn (x: u256, y: u256) Pair {\n    return Pair { a: x, b: y };\n};\n\n",
+            );
+            source.push_str(
+                "const make_front_triple = fn (x: u256, y: u256) Triple {\n    return (x, y, x +% y);\n};\n\n",
+            );
+            if self.has_nested_compound {
+                source.push_str(
+                    "const make_front_outer = fn (x: u256, y: u256, flag: bool) NestedOuter {\n    return NestedOuter { pair: Pair { a: x, b: y }, triple: make_front_triple(x, y), flag: flag };\n};\n\n",
+                );
+            }
         }
     }
 
@@ -599,6 +912,190 @@ impl FrontendPlan {
             );
             source.push_str("    if CBYTES_SHA_OK {\n        acc = @evm_xor(acc, 0x205);\n    }\n");
             source.push_str("    acc = @evm_xor(acc, CBYTES_READ_WORD);\n");
+        }
+
+        if self.has_parameterized_type {
+            source.push_str(
+                "    if BOX_U256_PARAMETERIZED {\n        acc = @evm_xor(acc, 0x301);\n    }\n",
+            );
+            source.push_str(
+                "    if BOX_U256_NAME_OK {\n        acc = @evm_xor(acc, 0x302);\n    }\n",
+            );
+            source.push_str(
+                "    if BOX_U256_FIELD_TYPE_OK {\n        acc = @evm_xor(acc, 0x303);\n    }\n",
+            );
+            source.push_str("    acc = @evm_xor(acc, BOX_PAIR_FIELD_COUNT);\n");
+            writeln!(
+                source,
+                "    let front_box_{entry_index} = BoxU256 {{ value: @evm_xor(acc, 0x33) }};"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(source, "    acc = @evm_xor(acc, front_box_{entry_index}.value);")
+                .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let front_box_pair_{entry_index} = BoxPair {{ value: Pair {{ a: acc, b: @evm_xor(acc, 0x34) }} }};"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(source, "    acc = @evm_xor(acc, front_box_pair_{entry_index}.value.b);")
+                .expect("writing to a string cannot fail");
+        }
+
+        if self.has_import_single {
+            source.push_str("    acc = @evm_xor(acc, SINGLE_IMPORT_MARKER);\n");
+        }
+        if self.has_import_alias {
+            source.push_str("    acc = @evm_xor(acc, ALIASED_IMPORT_MARKER);\n");
+        }
+        if self.has_import_glob {
+            source.push_str("    acc = @evm_xor(acc, glob_import_mix(acc));\n");
+        }
+        if self.has_deep_import {
+            writeln!(
+                source,
+                "    let imported_box_{entry_index} = ImportedBoxU256 {{ value: @evm_xor(acc, 0x404) }};"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    acc = @evm_xor(acc, imported_box_value(imported_box_{entry_index}));"
+            )
+            .expect("writing to a string cannot fail");
+        }
+
+        if self.has_comptime_control_flow {
+            source.push_str("    acc = @evm_xor(acc, FRONT_COMPTIME_BRANCH_VALUE);\n");
+        }
+        if self.has_comptime_loop {
+            source.push_str("    acc = @evm_xor(acc, FRONT_COMPTIME_LOOP_VALUE);\n");
+        }
+        if self.has_type_dependent_branch {
+            source.push_str("    acc = @evm_xor(acc, FRONT_PAIR_TYPE_SCORE);\n");
+            source.push_str("    acc = @evm_xor(acc, FRONT_TRIPLE_TYPE_SCORE);\n");
+        }
+
+        if self.has_function_early_return {
+            source.push_str(
+                "    acc = @evm_xor(acc, choose_front_value(@evm_iszero(@evm_and(acc, 1)), acc, @evm_xor(acc, 0x61)));\n",
+            );
+        }
+
+        if self.has_function_returns_compound {
+            writeln!(
+                source,
+                "    let front_fn_pair_{entry_index} = make_front_pair(acc, @evm_xor(acc, 0x62));"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(source, "    acc = @evm_xor(acc, mix_pair(front_fn_pair_{entry_index}));")
+                .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let front_fn_triple_{entry_index} = make_front_triple(acc, @evm_xor(acc, 0x63));"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(source, "    acc = @evm_xor(acc, mix_triple(front_fn_triple_{entry_index}));")
+                .expect("writing to a string cannot fail");
+            if self.has_nested_compound {
+                writeln!(
+                    source,
+                    "    let front_fn_outer_{entry_index} = make_front_outer(acc, @evm_xor(acc, 0x64), @evm_iszero(@evm_and(acc, 1)));"
+                )
+                .expect("writing to a string cannot fail");
+                writeln!(source, "    acc = @evm_xor(acc, front_fn_outer_{entry_index}.pair.b);")
+                    .expect("writing to a string cannot fail");
+                writeln!(
+                    source,
+                    "    acc = @evm_xor(acc, @get_field(front_fn_outer_{entry_index}.triple, 2));"
+                )
+                .expect("writing to a string cannot fail");
+                writeln!(
+                    source,
+                    "    if front_fn_outer_{entry_index}.flag {{\n        acc = @evm_xor(acc, 0x605);\n    }}"
+                )
+                .expect("writing to a string cannot fail");
+            }
+        }
+
+        if self.has_nested_compound {
+            writeln!(
+                source,
+                "    let nested_pair_{entry_index} = Pair {{ a: acc, b: @evm_xor(acc, 0x77) }};"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let nested_triple_{entry_index} = make_triple(@evm_add(acc, 1), @evm_add(acc, 2));"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let nested_outer_{entry_index} = NestedOuter {{ pair: nested_pair_{entry_index}, triple: nested_triple_{entry_index}, flag: @evm_iszero(@evm_and(acc, 1)) }};"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let nested_outer_updated_{entry_index} = @set_field(nested_outer_{entry_index}, 0, Pair {{ a: nested_outer_{entry_index}.pair.a +% 3, b: @get_field(nested_outer_{entry_index}.pair, 1) }});"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(source, "    acc = @evm_xor(acc, nested_outer_updated_{entry_index}.pair.a);")
+                .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    acc = @evm_xor(acc, @get_field(nested_outer_updated_{entry_index}.triple, 2));"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let nested_tuple_{entry_index}: NestedTuple = (Pair {{ a: acc, b: @evm_xor(acc, 0x88) }}, (acc, @evm_xor(acc, 0x99)), acc +% 5);"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let nested_tuple_pair_{entry_index} = @get_field(nested_tuple_{entry_index}, 0);"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let nested_tuple_inner_{entry_index} = @get_field(nested_tuple_{entry_index}, 1);"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(source, "    acc = @evm_xor(acc, nested_tuple_pair_{entry_index}.b);")
+                .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    acc = @evm_xor(acc, @get_field(nested_tuple_inner_{entry_index}, 1));"
+            )
+            .expect("writing to a string cannot fail");
+        }
+
+        if self.has_runtime_uninit {
+            writeln!(source, "    let front_uninit_{entry_index} = @uninit(RuntimeScratch);")
+                .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let front_uninit_ptr_{entry_index} = @set_field(front_uninit_{entry_index}, 0, scratch);"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    let front_uninit_filled_{entry_index} = @set_field(front_uninit_ptr_{entry_index}, 1, 32);"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(source, "    acc = @evm_xor(acc, front_uninit_filled_{entry_index}.len);")
+                .expect("writing to a string cannot fail");
+        }
+
+        if self.has_data_offset {
+            writeln!(
+                source,
+                "    let front_data_offset_{entry_index} = @data_offset(@slice_cbytes(\"hello\" hex\"00ff\", 2, 6));"
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                source,
+                "    if @evm_eq(front_data_offset_{entry_index}, front_data_offset_{entry_index}) {{\n        acc = @evm_xor(acc, 0x701);\n    }}"
+            )
+            .expect("writing to a string cannot fail");
         }
 
         if self.has_high_level_operator {
@@ -674,6 +1171,112 @@ impl FrontendPlan {
             source.push_str("                acc := xor(acc, 0x0203000000000000000000000000000000000000000000000000000000000000)\n");
         }
 
+        if self.has_parameterized_type {
+            source.push_str("                acc := xor(acc, 0x301)\n");
+            source.push_str("                acc := xor(acc, 0x302)\n");
+            source.push_str("                acc := xor(acc, 0x303)\n");
+            source.push_str("                acc := xor(acc, 1)\n");
+            source.push_str("                {\n");
+            source.push_str("                    let front_box_value := xor(acc, 0x33)\n");
+            source.push_str("                    acc := xor(acc, front_box_value)\n");
+            source.push_str("                    let front_box_pair_b := xor(acc, 0x34)\n");
+            source.push_str("                    acc := xor(acc, front_box_pair_b)\n");
+            source.push_str("                }\n");
+        }
+
+        if self.has_import_single {
+            source.push_str("                acc := xor(acc, 0x401)\n");
+        }
+        if self.has_import_alias {
+            source.push_str("                acc := xor(acc, 0x402)\n");
+        }
+        if self.has_import_glob {
+            source.push_str("                acc := xor(acc, add(acc, 0x403))\n");
+        }
+        if self.has_deep_import {
+            source.push_str("                acc := xor(acc, xor(acc, 0x404))\n");
+        }
+
+        if self.has_comptime_control_flow {
+            source.push_str("                acc := xor(acc, 0x501)\n");
+        }
+        if self.has_comptime_loop {
+            source.push_str("                acc := xor(acc, 6)\n");
+        }
+        if self.has_type_dependent_branch {
+            source.push_str("                acc := xor(acc, 12)\n");
+            source.push_str("                acc := xor(acc, 23)\n");
+        }
+
+        if self.has_function_early_return {
+            source.push_str("                {\n");
+            source.push_str("                    let chosen := xor(acc, 0x61)\n");
+            source.push_str("                    if iszero(and(acc, 1)) { chosen := acc }\n");
+            source.push_str("                    acc := xor(acc, chosen)\n");
+            source.push_str("                }\n");
+        }
+
+        if self.has_function_returns_compound {
+            source.push_str("                {\n");
+            source.push_str("                    let fn_pair_a := acc\n");
+            source.push_str("                    let fn_pair_b := xor(acc, 0x62)\n");
+            source.push_str(
+                "                    let fn_pair_mix := add(fn_pair_a, xor(fn_pair_b, 0x44))\n",
+            );
+            source.push_str("                    acc := xor(acc, fn_pair_mix)\n");
+            source.push_str("                    let fn_t0 := acc\n");
+            source.push_str("                    let fn_t1 := xor(acc, 0x63)\n");
+            source.push_str("                    let fn_t2 := add(fn_t0, fn_t1)\n");
+            source.push_str("                    let fn_t1b := xor(fn_t1, 0x55)\n");
+            source.push_str(
+                "                    let fn_tuple_mix := add(add(fn_t0, fn_t1b), fn_t2)\n",
+            );
+            source.push_str("                    acc := xor(acc, fn_tuple_mix)\n");
+            if self.has_nested_compound {
+                source.push_str("                    let front_outer_x := acc\n");
+                source.push_str("                    let front_outer_y := xor(acc, 0x64)\n");
+                source.push_str(
+                    "                    let front_outer_t2 := add(front_outer_x, front_outer_y)\n",
+                );
+                source
+                    .push_str("                    let front_outer_flag := iszero(and(acc, 1))\n");
+                source.push_str("                    acc := xor(acc, front_outer_y)\n");
+                source.push_str("                    acc := xor(acc, front_outer_t2)\n");
+                source.push_str(
+                    "                    if front_outer_flag { acc := xor(acc, 0x605) }\n",
+                );
+            }
+            source.push_str("                }\n");
+        }
+
+        if self.has_nested_compound {
+            source.push_str("                {\n");
+            source.push_str("                    let nested_pair_a := acc\n");
+            source.push_str("                    let nested_pair_b := xor(acc, 0x77)\n");
+            source.push_str("                    let nested_t0 := add(acc, 1)\n");
+            source.push_str("                    let nested_t1 := add(acc, 2)\n");
+            source.push_str("                    let nested_t2 := add(nested_t0, nested_t1)\n");
+            source.push_str(
+                "                    let nested_updated_pair_a := add(nested_pair_a, 3)\n",
+            );
+            source.push_str("                    acc := xor(acc, nested_updated_pair_a)\n");
+            source.push_str("                    acc := xor(acc, nested_t2)\n");
+            source.push_str("                    let nested_tuple_pair_b := xor(acc, 0x88)\n");
+            source.push_str("                    let nested_tuple_inner_1 := xor(acc, 0x99)\n");
+            source.push_str("                    acc := xor(acc, nested_tuple_pair_b)\n");
+            source.push_str("                    acc := xor(acc, nested_tuple_inner_1)\n");
+            source.push_str("                    pop(nested_pair_b)\n");
+            source.push_str("                }\n");
+        }
+
+        if self.has_runtime_uninit {
+            source.push_str("                acc := xor(acc, 32)\n");
+        }
+
+        if self.has_data_offset {
+            source.push_str("                acc := xor(acc, 0x701)\n");
+        }
+
         if self.has_high_level_operator {
             source.push_str(
                 "                acc := xor(acc, yul_operator_mix(acc, calldatasize()))\n",
@@ -728,9 +1331,20 @@ impl FrontendPlan {
     fn classify(&self, classification: &mut SeedClassification) {
         classification.has_struct |= self.has_struct;
         classification.has_tuple |= self.has_tuple;
-        classification.has_compound_literal |= self.has_struct || self.has_tuple;
-        classification.has_field_access |= self.has_struct || self.has_tuple;
-        classification.has_field_update |= self.has_tuple;
+        classification.has_compound_literal |= self.has_struct
+            || self.has_tuple
+            || self.has_parameterized_type
+            || self.has_function_returns_compound
+            || self.has_nested_compound
+            || self.has_runtime_uninit;
+        classification.has_field_access |= self.has_struct
+            || self.has_tuple
+            || self.has_parameterized_type
+            || self.has_function_returns_compound
+            || self.has_nested_compound
+            || self.has_runtime_uninit;
+        classification.has_field_update |=
+            self.has_tuple || self.has_nested_compound || self.has_runtime_uninit;
         classification.has_comptime_type_reflection |= self.has_comptime_type_reflection;
         classification.has_cbytes_builtin |= self.has_cbytes_builtin;
         classification.has_high_level_operator |= self.has_high_level_operator;
@@ -738,9 +1352,23 @@ impl FrontendPlan {
         classification.has_helper_function |= self.has_helper_function;
         classification.has_nested_helper_call |= self.has_nested_helper_call;
         classification.has_import |= self.has_import;
+        classification.has_import_single |= self.has_import_single;
+        classification.has_import_group |= self.has_import;
+        classification.has_import_alias |= self.has_import_alias;
+        classification.has_import_glob |= self.has_import_glob;
+        classification.has_deep_import |= self.has_deep_import;
         classification.has_comments |= self.has_comments;
         classification.has_binary_literal |= self.has_binary_literal;
         classification.has_hex_literal |= self.has_hex_literal;
+        classification.has_parameterized_type |= self.has_parameterized_type;
+        classification.has_comptime_control_flow |= self.has_comptime_control_flow;
+        classification.has_comptime_loop |= self.has_comptime_loop;
+        classification.has_type_dependent_branch |= self.has_type_dependent_branch;
+        classification.has_function_returns_compound |= self.has_function_returns_compound;
+        classification.has_function_early_return |= self.has_function_early_return;
+        classification.has_nested_compound |= self.has_nested_compound;
+        classification.has_runtime_uninit |= self.has_runtime_uninit;
+        classification.has_data_offset |= self.has_data_offset;
         classification.has_std_registered |= self.has_core_ops_operator;
     }
 
@@ -751,6 +1379,11 @@ impl FrontendPlan {
             || self.has_helper_function
             || self.has_nested_helper_call
             || self.has_import
+            || self.has_parameterized_type
+            || self.has_type_dependent_branch
+            || self.has_function_returns_compound
+            || self.has_nested_compound
+            || self.has_runtime_uninit
     }
 }
 
@@ -2327,10 +2960,15 @@ mod tests {
         let case = frontend_feature_case();
         let sources = case.plank_sources();
 
-        assert_eq!(sources.files.len(), 3);
+        assert_eq!(sources.files.len(), 6);
         assert_eq!(sources.std_mode, crate::StdMode::RepoStd);
         assert!(sources.to_string().contains("== gen/types.plk =="));
+        assert!(sources.to_string().contains("== gen/extras.plk =="));
+        assert!(sources.to_string().contains("== gen/glob_helpers.plk =="));
+        assert!(sources.to_string().contains("== gen/nested/boxes.plk =="));
         assert!(sources.to_string().contains("import gen::types"));
+        assert!(sources.to_string().contains("import gen::extras::SINGLE_IMPORT_MARKER;"));
+        assert!(sources.to_string().contains("import gen::glob_helpers::*;"));
     }
 
     #[test]
@@ -2345,6 +2983,47 @@ mod tests {
         .unwrap_or_else(|err| {
             panic!("feature case did not compile:\n{err}\n\n{}", case.plank_sources())
         });
+    }
+
+    #[test]
+    fn frontend_feature_case_renders_new_compilation_features() {
+        let case = frontend_feature_case();
+        let sources = case.plank_sources().to_string();
+
+        assert!(sources.contains("const Box = fn (comptime T: type) type"));
+        assert!(sources.contains("@has_parameterized_name(BoxU256)"));
+        assert!(
+            sources.contains("import gen::extras::ALIAS_IMPORT_MARKER as ALIASED_IMPORT_MARKER;")
+        );
+        assert!(sources.contains("import gen::glob_helpers::*;"));
+        assert!(sources.contains("import gen::nested::boxes::{DeepBoxU256 as ImportedBoxU256"));
+        assert!(sources.contains("const FRONT_COMPTIME_LOOP_VALUE = comptime"));
+        assert!(sources.contains("const front_type_score = fn (comptime T: type) u256"));
+        assert!(sources.contains("const choose_front_value = fn"));
+        assert!(sources.contains("const make_front_pair = fn"));
+        assert!(sources.contains("const NestedOuter = struct"));
+        assert!(sources.contains("let front_uninit_0 = @uninit(RuntimeScratch);"));
+        assert!(sources.contains("@data_offset(@slice_cbytes"));
+    }
+
+    #[test]
+    fn frontend_feature_case_classifies_new_compilation_features() {
+        let classification = frontend_feature_case().seed_classification();
+
+        assert!(classification.has_parameterized_type);
+        assert!(classification.has_import_single);
+        assert!(classification.has_import_group);
+        assert!(classification.has_import_alias);
+        assert!(classification.has_import_glob);
+        assert!(classification.has_deep_import);
+        assert!(classification.has_comptime_control_flow);
+        assert!(classification.has_comptime_loop);
+        assert!(classification.has_type_dependent_branch);
+        assert!(classification.has_function_returns_compound);
+        assert!(classification.has_function_early_return);
+        assert!(classification.has_nested_compound);
+        assert!(classification.has_runtime_uninit);
+        assert!(classification.has_data_offset);
     }
 
     #[test]
@@ -2373,6 +3052,7 @@ mod tests {
                 has_comments: false,
                 has_binary_literal: false,
                 has_hex_literal: true,
+                ..Default::default()
             },
         };
         let sources = case.plank_sources();
@@ -2412,6 +3092,7 @@ mod tests {
                 has_comments: false,
                 has_binary_literal: false,
                 has_hex_literal: false,
+                ..Default::default()
             },
         };
 
@@ -2462,6 +3143,19 @@ mod tests {
                 has_comments: true,
                 has_binary_literal: true,
                 has_hex_literal: true,
+                has_import_single: true,
+                has_import_alias: true,
+                has_import_glob: true,
+                has_deep_import: true,
+                has_parameterized_type: true,
+                has_comptime_control_flow: true,
+                has_comptime_loop: true,
+                has_type_dependent_branch: true,
+                has_function_returns_compound: true,
+                has_function_early_return: true,
+                has_nested_compound: true,
+                has_runtime_uninit: true,
+                has_data_offset: true,
             },
         }
     }

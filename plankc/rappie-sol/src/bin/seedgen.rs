@@ -17,7 +17,7 @@ use std::{
     process::ExitCode,
 };
 
-const DEFAULT_TARGET: usize = 160;
+const DEFAULT_TARGET: usize = 256;
 const DEFAULT_CANDIDATE_LIMIT: usize = 300_000;
 const DEFAULT_OUTPUT_DIR: &str = "fuzz/seeds/plank_sol_program_diff";
 const SIZES: [usize; 7] = [128, 256, 512, 1024, 2048, 4096, 8192];
@@ -70,9 +70,23 @@ const ALL_BUCKETS: &[Bucket] = &[
     Bucket::HelperFunction,
     Bucket::NestedHelperCall,
     Bucket::Import,
+    Bucket::ImportSingle,
+    Bucket::ImportGroup,
+    Bucket::ImportAlias,
+    Bucket::ImportGlob,
+    Bucket::DeepImport,
     Bucket::Comments,
     Bucket::BinaryLiteral,
     Bucket::HexLiteral,
+    Bucket::ParameterizedType,
+    Bucket::ComptimeControlFlow,
+    Bucket::ComptimeLoop,
+    Bucket::TypeDependentBranch,
+    Bucket::FunctionReturnsCompound,
+    Bucket::FunctionEarlyReturn,
+    Bucket::NestedCompound,
+    Bucket::RuntimeUninit,
+    Bucket::DataOffset,
     Bucket::StdRegistered,
 ];
 
@@ -317,9 +331,23 @@ impl From<SeedClassification> for ComboKey {
             classification.has_helper_function,
             classification.has_nested_helper_call,
             classification.has_import,
+            classification.has_import_single,
+            classification.has_import_group,
+            classification.has_import_alias,
+            classification.has_import_glob,
+            classification.has_deep_import,
             classification.has_comments,
             classification.has_binary_literal,
             classification.has_hex_literal,
+            classification.has_parameterized_type,
+            classification.has_comptime_control_flow,
+            classification.has_comptime_loop,
+            classification.has_type_dependent_branch,
+            classification.has_function_returns_compound,
+            classification.has_function_early_return,
+            classification.has_nested_compound,
+            classification.has_runtime_uninit,
+            classification.has_data_offset,
             classification.has_std_registered,
         ];
 
@@ -389,9 +417,23 @@ enum Bucket {
     HelperFunction,
     NestedHelperCall,
     Import,
+    ImportSingle,
+    ImportGroup,
+    ImportAlias,
+    ImportGlob,
+    DeepImport,
     Comments,
     BinaryLiteral,
     HexLiteral,
+    ParameterizedType,
+    ComptimeControlFlow,
+    ComptimeLoop,
+    TypeDependentBranch,
+    FunctionReturnsCompound,
+    FunctionEarlyReturn,
+    NestedCompound,
+    RuntimeUninit,
+    DataOffset,
     StdRegistered,
     ComboExtra,
 }
@@ -559,6 +601,21 @@ fn buckets_for(classification: &SeedClassification) -> Vec<Bucket> {
     if classification.has_import {
         buckets.push(Bucket::Import);
     }
+    if classification.has_import_single {
+        buckets.push(Bucket::ImportSingle);
+    }
+    if classification.has_import_group {
+        buckets.push(Bucket::ImportGroup);
+    }
+    if classification.has_import_alias {
+        buckets.push(Bucket::ImportAlias);
+    }
+    if classification.has_import_glob {
+        buckets.push(Bucket::ImportGlob);
+    }
+    if classification.has_deep_import {
+        buckets.push(Bucket::DeepImport);
+    }
     if classification.has_comments {
         buckets.push(Bucket::Comments);
     }
@@ -567,6 +624,33 @@ fn buckets_for(classification: &SeedClassification) -> Vec<Bucket> {
     }
     if classification.has_hex_literal {
         buckets.push(Bucket::HexLiteral);
+    }
+    if classification.has_parameterized_type {
+        buckets.push(Bucket::ParameterizedType);
+    }
+    if classification.has_comptime_control_flow {
+        buckets.push(Bucket::ComptimeControlFlow);
+    }
+    if classification.has_comptime_loop {
+        buckets.push(Bucket::ComptimeLoop);
+    }
+    if classification.has_type_dependent_branch {
+        buckets.push(Bucket::TypeDependentBranch);
+    }
+    if classification.has_function_returns_compound {
+        buckets.push(Bucket::FunctionReturnsCompound);
+    }
+    if classification.has_function_early_return {
+        buckets.push(Bucket::FunctionEarlyReturn);
+    }
+    if classification.has_nested_compound {
+        buckets.push(Bucket::NestedCompound);
+    }
+    if classification.has_runtime_uninit {
+        buckets.push(Bucket::RuntimeUninit);
+    }
+    if classification.has_data_offset {
+        buckets.push(Bucket::DataOffset);
     }
     if classification.has_std_registered {
         buckets.push(Bucket::StdRegistered);
@@ -666,9 +750,23 @@ fn bucket_name(bucket: Bucket) -> &'static str {
         Bucket::HelperFunction => "helper_function",
         Bucket::NestedHelperCall => "nested_helper_call",
         Bucket::Import => "import",
+        Bucket::ImportSingle => "import_single",
+        Bucket::ImportGroup => "import_group",
+        Bucket::ImportAlias => "import_alias",
+        Bucket::ImportGlob => "import_glob",
+        Bucket::DeepImport => "deep_import",
         Bucket::Comments => "comments",
         Bucket::BinaryLiteral => "binary_literal",
         Bucket::HexLiteral => "hex_literal",
+        Bucket::ParameterizedType => "parameterized_type",
+        Bucket::ComptimeControlFlow => "comptime_control_flow",
+        Bucket::ComptimeLoop => "comptime_loop",
+        Bucket::TypeDependentBranch => "type_dependent_branch",
+        Bucket::FunctionReturnsCompound => "function_returns_compound",
+        Bucket::FunctionEarlyReturn => "function_early_return",
+        Bucket::NestedCompound => "nested_compound",
+        Bucket::RuntimeUninit => "runtime_uninit",
+        Bucket::DataOffset => "data_offset",
         Bucket::StdRegistered => "std_registered",
         Bucket::ComboExtra => "combo",
     }
@@ -852,5 +950,128 @@ impl XorShift64 {
         x ^= x << 17;
         self.state = x;
         x
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_frontend_buckets_are_selected() {
+        let mut classification = empty_classification();
+        classification.has_parameterized_type = true;
+        classification.has_import = true;
+        classification.has_import_single = true;
+        classification.has_import_group = true;
+        classification.has_import_alias = true;
+        classification.has_import_glob = true;
+        classification.has_deep_import = true;
+        classification.has_comptime_control_flow = true;
+        classification.has_comptime_loop = true;
+        classification.has_type_dependent_branch = true;
+        classification.has_function_returns_compound = true;
+        classification.has_function_early_return = true;
+        classification.has_nested_compound = true;
+        classification.has_runtime_uninit = true;
+        classification.has_data_offset = true;
+
+        let buckets = buckets_for(&classification);
+        for bucket in [
+            Bucket::ParameterizedType,
+            Bucket::ImportSingle,
+            Bucket::ImportGroup,
+            Bucket::ImportAlias,
+            Bucket::ImportGlob,
+            Bucket::DeepImport,
+            Bucket::ComptimeControlFlow,
+            Bucket::ComptimeLoop,
+            Bucket::TypeDependentBranch,
+            Bucket::FunctionReturnsCompound,
+            Bucket::FunctionEarlyReturn,
+            Bucket::NestedCompound,
+            Bucket::RuntimeUninit,
+            Bucket::DataOffset,
+        ] {
+            assert!(buckets.contains(&bucket), "missing bucket {bucket:?}");
+        }
+    }
+
+    #[test]
+    fn required_bucket_names_are_unique() {
+        assert_eq!(DEFAULT_TARGET, 256);
+
+        let mut names = BTreeSet::new();
+        for bucket in ALL_BUCKETS {
+            let name = bucket_name(*bucket);
+            assert!(!name.is_empty());
+            assert!(names.insert(name), "duplicate bucket name {name}");
+        }
+    }
+
+    fn empty_classification() -> SeedClassification {
+        SeedClassification {
+            mode: SeedProgramMode::RawFallback,
+            entry_count: 1,
+            call_count: 1,
+            touches_multiple_entries: false,
+            has_short_calldata: false,
+            has_unaligned_calldata: false,
+            has_full_width_word: false,
+            has_arithmetic: false,
+            has_signed_arithmetic: false,
+            has_memory_width: false,
+            has_memory_copy: false,
+            has_calldata_copy: false,
+            has_storage: false,
+            has_repeated_storage_slot: false,
+            has_transient_storage: false,
+            has_external_code: false,
+            has_call: false,
+            has_delegatecall: false,
+            has_returndata: false,
+            has_create: false,
+            has_create2: false,
+            has_log: false,
+            max_log_topics: 0,
+            has_branch: false,
+            has_loop: false,
+            has_return_exit: false,
+            has_revert_exit: false,
+            has_conditional_exit: false,
+            has_stop_exit: false,
+            has_invalid_exit: false,
+            exit_kind: SeedExitKind::Stop,
+            has_struct: false,
+            has_tuple: false,
+            has_compound_literal: false,
+            has_field_access: false,
+            has_field_update: false,
+            has_comptime_type_reflection: false,
+            has_cbytes_builtin: false,
+            has_high_level_operator: false,
+            has_core_ops_operator: false,
+            has_helper_function: false,
+            has_nested_helper_call: false,
+            has_import: false,
+            has_import_single: false,
+            has_import_group: false,
+            has_import_alias: false,
+            has_import_glob: false,
+            has_deep_import: false,
+            has_comments: false,
+            has_binary_literal: false,
+            has_hex_literal: false,
+            has_parameterized_type: false,
+            has_comptime_control_flow: false,
+            has_comptime_loop: false,
+            has_type_dependent_branch: false,
+            has_function_returns_compound: false,
+            has_function_early_return: false,
+            has_nested_compound: false,
+            has_runtime_uninit: false,
+            has_data_offset: false,
+            has_std_registered: false,
+        }
     }
 }
