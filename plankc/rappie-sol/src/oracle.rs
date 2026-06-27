@@ -8,8 +8,156 @@ use alloy_primitives::hex;
 use plank_driver::BackendKind;
 use std::fmt;
 
-const PLANK_BACKEND: BackendKind = BackendKind::SirDebug;
-const PLANK_OPTIMIZATIONS: Option<&str> = None;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackendSpec {
+    pub name: &'static str,
+    pub kind: BackendKind,
+    pub optimizations: Option<&'static str>,
+}
+
+pub const DEFAULT_PLANK_BACKENDS: [BackendSpec; 37] = [
+    BackendSpec { name: "sir-debug", kind: BackendKind::SirDebug, optimizations: None },
+    BackendSpec { name: "sir-release", kind: BackendKind::SirRelease, optimizations: None },
+    BackendSpec { name: "sir-release-s", kind: BackendKind::SirRelease, optimizations: Some("s") },
+    BackendSpec { name: "sir-release-c", kind: BackendKind::SirRelease, optimizations: Some("c") },
+    BackendSpec { name: "sir-release-u", kind: BackendKind::SirRelease, optimizations: Some("u") },
+    BackendSpec { name: "sir-release-d", kind: BackendKind::SirRelease, optimizations: Some("d") },
+    BackendSpec { name: "sir-release-l", kind: BackendKind::SirRelease, optimizations: Some("l") },
+    BackendSpec {
+        name: "sir-release-sc",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("sc"),
+    },
+    BackendSpec {
+        name: "sir-release-su",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("su"),
+    },
+    BackendSpec {
+        name: "sir-release-sd",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("sd"),
+    },
+    BackendSpec {
+        name: "sir-release-sl",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("sl"),
+    },
+    BackendSpec {
+        name: "sir-release-cu",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("cu"),
+    },
+    BackendSpec {
+        name: "sir-release-cd",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("cd"),
+    },
+    BackendSpec {
+        name: "sir-release-cl",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("cl"),
+    },
+    BackendSpec {
+        name: "sir-release-ud",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("ud"),
+    },
+    BackendSpec {
+        name: "sir-release-ul",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("ul"),
+    },
+    BackendSpec {
+        name: "sir-release-dl",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("dl"),
+    },
+    BackendSpec {
+        name: "sir-release-scu",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("scu"),
+    },
+    BackendSpec {
+        name: "sir-release-scd",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("scd"),
+    },
+    BackendSpec {
+        name: "sir-release-scl",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("scl"),
+    },
+    BackendSpec {
+        name: "sir-release-sud",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("sud"),
+    },
+    BackendSpec {
+        name: "sir-release-sul",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("sul"),
+    },
+    BackendSpec {
+        name: "sir-release-sdl",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("sdl"),
+    },
+    BackendSpec {
+        name: "sir-release-cud",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("cud"),
+    },
+    BackendSpec {
+        name: "sir-release-cul",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("cul"),
+    },
+    BackendSpec {
+        name: "sir-release-cdl",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("cdl"),
+    },
+    BackendSpec {
+        name: "sir-release-udl",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("udl"),
+    },
+    BackendSpec {
+        name: "sir-release-scud",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("scud"),
+    },
+    BackendSpec {
+        name: "sir-release-scul",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("scul"),
+    },
+    BackendSpec {
+        name: "sir-release-scdl",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("scdl"),
+    },
+    BackendSpec {
+        name: "sir-release-sudl",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("sudl"),
+    },
+    BackendSpec {
+        name: "sir-release-cudl",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("cudl"),
+    },
+    BackendSpec {
+        name: "sir-release-scudl",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("scudl"),
+    },
+    BackendSpec { name: "sona-o0", kind: BackendKind::Sona, optimizations: Some("O0") },
+    BackendSpec { name: "sona-o1", kind: BackendKind::Sona, optimizations: Some("O1") },
+    BackendSpec { name: "sona-os", kind: BackendKind::Sona, optimizations: Some("Os") },
+    BackendSpec { name: "sona-o2", kind: BackendKind::Sona, optimizations: Some("O2") },
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Execution {
@@ -28,9 +176,9 @@ pub enum MismatchReason {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HarnessError {
-    PlankCompile { diagnostics: String },
+    PlankCompile { backend: &'static str, diagnostics: String },
     SolidityCompile { diagnostics: String },
-    PlankExecute { message: String },
+    PlankExecute { backend: &'static str, message: String },
     SolidityExecute { message: String },
     Mismatch { plank: Box<Execution>, solidity: Box<Execution>, reason: MismatchReason },
 }
@@ -43,7 +191,9 @@ pub fn compare_plank_solidity(case: &FuzzCase) -> Result<(), HarnessError> {
     compare_source_set(&plank_sources, &solidity_source, &calldatas)
 }
 
-pub fn execute_plank_solidity(case: &FuzzCase) -> Result<(Execution, Execution), HarnessError> {
+pub fn execute_plank_solidity(
+    case: &FuzzCase,
+) -> Result<(Vec<Execution>, Execution), HarnessError> {
     let plank_sources = case.plank_sources();
     let solidity_source = case.solidity_source();
     let calldatas = case.calldatas();
@@ -57,9 +207,7 @@ pub fn compare_sources(
     calldatas: &[Vec<u8>],
 ) -> Result<(), HarnessError> {
     let plank_sources = PlankSourceSet::single_main(plank_source.to_string());
-    let (plank, solidity) = execute_source_set(&plank_sources, solidity_source, calldatas)?;
-
-    compare_traces(plank, solidity)
+    compare_source_set(&plank_sources, solidity_source, calldatas)
 }
 
 pub fn compare_source_set(
@@ -67,47 +215,59 @@ pub fn compare_source_set(
     solidity_source: &str,
     calldatas: &[Vec<u8>],
 ) -> Result<(), HarnessError> {
-    let (plank, solidity) = execute_source_set(plank_sources, solidity_source, calldatas)?;
+    let (planks, solidity) = execute_source_set(plank_sources, solidity_source, calldatas)?;
 
-    compare_traces(plank, solidity)
+    for plank in planks {
+        compare_traces(plank, solidity.clone())?;
+    }
+
+    Ok(())
 }
 
 fn execute_source_set(
     plank_sources: &PlankSourceSet,
     solidity_source: &str,
     calldatas: &[Vec<u8>],
-) -> Result<(Execution, Execution), HarnessError> {
-    let plank_bytecode = compile_plank_sources(plank_sources, PLANK_BACKEND, PLANK_OPTIMIZATIONS)
-        .map_err(|err| HarnessError::PlankCompile {
-        diagnostics: err.diagnostics().to_string(),
-    })?;
+) -> Result<(Vec<Execution>, Execution), HarnessError> {
     let solidity_bytecode = compile_solidity_source(solidity_source)
         .map_err(|err| HarnessError::SolidityCompile { diagnostics: err.to_string() })?;
-
-    let plank = Execution {
-        name: "plank",
-        trace: run_bytecode_sequence(&plank_bytecode, calldatas)
-            .map_err(|err| HarnessError::PlankExecute { message: err.to_string() })?,
-    };
     let solidity = Execution {
         name: "solidity",
         trace: run_bytecode_sequence(&solidity_bytecode, calldatas)
             .map_err(|err| HarnessError::SolidityExecute { message: err.to_string() })?,
     };
+    let mut planks = Vec::with_capacity(DEFAULT_PLANK_BACKENDS.len());
 
-    Ok((plank, solidity))
+    for backend in DEFAULT_PLANK_BACKENDS {
+        let plank_bytecode =
+            compile_plank_sources(plank_sources, backend.kind, backend.optimizations).map_err(
+                |err| HarnessError::PlankCompile {
+                    backend: backend.name,
+                    diagnostics: err.diagnostics().to_string(),
+                },
+            )?;
+        let trace = run_bytecode_sequence(&plank_bytecode, calldatas).map_err(|err| {
+            HarnessError::PlankExecute { backend: backend.name, message: err.to_string() }
+        })?;
+
+        planks.push(Execution { name: backend.name, trace });
+    }
+
+    Ok((planks, solidity))
 }
 
 impl fmt::Display for HarnessError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::PlankCompile { diagnostics } => {
-                write!(f, "Plank compilation failed:\n{diagnostics}")
+            Self::PlankCompile { backend, diagnostics } => {
+                write!(f, "{backend} compilation failed:\n{diagnostics}")
             }
             Self::SolidityCompile { diagnostics } => {
                 write!(f, "Solidity compilation failed:\n{diagnostics}")
             }
-            Self::PlankExecute { message } => write!(f, "Plank execution failed:\n{message}"),
+            Self::PlankExecute { backend, message } => {
+                write!(f, "{backend} execution failed:\n{message}")
+            }
             Self::SolidityExecute { message } => {
                 write!(f, "Solidity execution failed:\n{message}")
             }
@@ -215,12 +375,81 @@ fn compare_traces(plank: Execution, solidity: Execution) -> Result<(), HarnessEr
 
 #[cfg(test)]
 mod tests {
-    use super::{Execution, HarnessError, MismatchReason, compare_traces};
-    use crate::evm::{EvmCallResult, EvmTrace, ObservedLog, ObservedStorageSlot};
+    use super::{DEFAULT_PLANK_BACKENDS, Execution, HarnessError, MismatchReason, compare_traces};
+    use crate::{
+        compiler::plank::compile_plank_sources,
+        evm::{EvmCallResult, EvmTrace, ObservedLog, ObservedStorageSlot},
+        sources::PlankSourceSet,
+    };
+    use plank_driver::BackendKind;
+    use std::collections::BTreeSet;
+
+    const SMALL_PROGRAM: &str = r#"
+init {
+    @evm_stop();
+}
+"#;
+
+    #[test]
+    fn default_backend_set_has_expected_size_and_unique_names() {
+        assert_eq!(DEFAULT_PLANK_BACKENDS.len(), 37);
+
+        let mut names = BTreeSet::new();
+        for backend in DEFAULT_PLANK_BACKENDS {
+            assert!(names.insert(backend.name), "duplicate backend name {}", backend.name);
+        }
+    }
+
+    #[test]
+    fn default_backend_set_contains_sir_release_optimization_subsets_in_scudl_order() {
+        let actual = DEFAULT_PLANK_BACKENDS
+            .iter()
+            .filter(|backend| backend.kind == BackendKind::SirRelease)
+            .filter_map(|backend| backend.optimizations)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![
+                "s", "c", "u", "d", "l", "sc", "su", "sd", "sl", "cu", "cd", "cl", "ud", "ul",
+                "dl", "scu", "scd", "scl", "sud", "sul", "sdl", "cud", "cul", "cdl", "udl", "scud",
+                "scul", "scdl", "sudl", "cudl", "scudl",
+            ]
+        );
+    }
+
+    #[test]
+    fn default_backend_set_contains_sona_optimization_levels() {
+        let actual = DEFAULT_PLANK_BACKENDS
+            .iter()
+            .filter(|backend| backend.kind == BackendKind::Sona)
+            .map(|backend| (backend.name, backend.optimizations))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![
+                ("sona-o0", Some("O0")),
+                ("sona-o1", Some("O1")),
+                ("sona-os", Some("Os")),
+                ("sona-o2", Some("O2")),
+            ]
+        );
+    }
+
+    #[test]
+    fn small_program_compiles_through_every_default_backend() {
+        let sources = PlankSourceSet::single_main(SMALL_PROGRAM.to_string());
+
+        for backend in DEFAULT_PLANK_BACKENDS {
+            compile_plank_sources(&sources, backend.kind, backend.optimizations)
+                .unwrap_or_else(|err| panic!("{} should compile: {err}", backend.name));
+        }
+    }
 
     #[test]
     fn compare_traces_accepts_matching_results() {
-        let plank = Execution { name: "plank", trace: trace(vec![call(true, vec![1])]) };
+        let plank = Execution { name: "sir-debug", trace: trace(vec![call(true, vec![1])]) };
         let solidity = Execution { name: "solidity", trace: trace(vec![call(true, vec![1])]) };
 
         compare_traces(plank, solidity).expect("matching traces should pass");
@@ -228,7 +457,7 @@ mod tests {
 
     #[test]
     fn compare_traces_rejects_call_count_mismatch() {
-        let plank = Execution { name: "plank", trace: trace(vec![call(true, vec![])]) };
+        let plank = Execution { name: "sir-debug", trace: trace(vec![call(true, vec![])]) };
         let solidity = Execution { name: "solidity", trace: trace(vec![]) };
 
         assert!(matches!(
@@ -240,7 +469,7 @@ mod tests {
     #[test]
     fn compare_traces_rejects_indexed_success_mismatch() {
         let plank = Execution {
-            name: "plank",
+            name: "sir-debug",
             trace: trace(vec![call(true, vec![]), call(false, vec![])]),
         };
         let solidity = Execution {
@@ -256,7 +485,7 @@ mod tests {
 
     #[test]
     fn compare_traces_rejects_indexed_output_mismatch() {
-        let plank = Execution { name: "plank", trace: trace(vec![call(true, vec![1])]) };
+        let plank = Execution { name: "sir-debug", trace: trace(vec![call(true, vec![1])]) };
         let solidity = Execution { name: "solidity", trace: trace(vec![call(true, vec![2])]) };
 
         assert!(matches!(
@@ -269,7 +498,7 @@ mod tests {
     fn compare_traces_rejects_indexed_log_mismatch() {
         let mut left = call(true, vec![]);
         left.logs.push(ObservedLog { address: [1; 20], topics: vec![[2; 32]], data: vec![3] });
-        let plank = Execution { name: "plank", trace: trace(vec![left]) };
+        let plank = Execution { name: "sir-debug", trace: trace(vec![left]) };
         let solidity = Execution { name: "solidity", trace: trace(vec![call(true, vec![])]) };
 
         assert!(matches!(
@@ -282,7 +511,7 @@ mod tests {
     fn compare_traces_rejects_final_storage_mismatch() {
         let mut plank_trace = trace(vec![call(true, vec![])]);
         plank_trace.final_storage.push(ObservedStorageSlot { slot: [1; 32], value: [2; 32] });
-        let plank = Execution { name: "plank", trace: plank_trace };
+        let plank = Execution { name: "sir-debug", trace: plank_trace };
         let solidity = Execution { name: "solidity", trace: trace(vec![call(true, vec![])]) };
 
         assert!(matches!(

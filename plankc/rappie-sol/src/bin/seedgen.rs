@@ -489,11 +489,11 @@ fn decode_case(bytes: &[u8]) -> Option<FuzzCase> {
 }
 
 fn verified(case: &FuzzCase) -> bool {
-    let Ok((plank, solidity)) = execute_plank_solidity(case) else {
+    let Ok((planks, solidity)) = execute_plank_solidity(case) else {
         return false;
     };
 
-    plank.trace == solidity.trace
+    planks.iter().all(|plank| plank.trace == solidity.trace)
 }
 
 fn buckets_for(classification: &SeedClassification) -> Vec<Bucket> {
