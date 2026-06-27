@@ -10,9 +10,9 @@ plank-mir.workspace = true
 plank-session.workspace = true
 plank-values.workspace = true
 smallvec.workspace = true
-sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "5987a72" }
-sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "5987a72" }
-sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "5987a72" }
+sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "9c4e1a7124d30447b7f080be1e0dcf86000bf03a" }
+sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "9c4e1a7124d30447b7f080be1e0dcf86000bf03a" }
+sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "9c4e1a7124d30447b7f080be1e0dcf86000bf03a" }
 thiserror.workspace = true
 
 [dev-dependencies]
