@@ -17,17 +17,34 @@ Install `cargo-fuzz` once:
 cargo install cargo-fuzz
 ```
 
-Provide a native `solx` binary. The harness resolves it in this order:
+Provide native `solx` and `solc` binaries. `solx` remains the Solidity
+reference compiler. `solc` is also run as a strict Solidity peer backend across
+optimizer and via-IR modes.
+
+The harness resolves `solx` in this order:
 
 1. `RAPPIE_SOL_SOLX`
 2. `SOLX_PATH`
 3. `solx` on `PATH`
+
+The harness resolves `solc` in this order:
+
+1. `RAPPIE_SOL_SOLC`
+2. `SOLC_PATH`
+3. `solc` on `PATH`
 
 The wrapper invokes `solx --standard-json --threads 1` and sends all source over
 stdin. It does not write source files, artifacts, project caches, or shared
 compiler output, so it is safe to run with multiple libFuzzer workers such as
 `-fork=12`. `--threads 1` avoids nested compiler parallelism while libFuzzer is
 already running multiple worker processes.
+
+The `solc` peers are invoked with `solc --standard-json`:
+
+- `solc-noopt-legacy`: optimizer disabled, `viaIR = false`
+- `solc-noopt-via-ir`: optimizer disabled, `viaIR = true`
+- `solc-opt-legacy`: optimizer enabled with `runs = 200`, `viaIR = false`
+- `solc-opt-via-ir`: optimizer enabled with `runs = 200`, `viaIR = true`
 
 ## Running
 
@@ -37,7 +54,8 @@ From `plankc/rappie-sol/`:
 mkdir -p fuzz/corpus/plank_sol_program_diff
 cp fuzz/seeds/plank_sol_program_diff/* fuzz/corpus/plank_sol_program_diff/
 RAPPIE_SOL_SOLX=/path/to/solx cargo +nightly fuzz build plank_sol_program_diff
-RAPPIE_SOL_SOLX=/path/to/solx cargo +nightly fuzz run plank_sol_program_diff -- -fork=12
+RAPPIE_SOL_SOLX=/path/to/solx RAPPIE_SOL_SOLC=/path/to/solc \
+    cargo +nightly fuzz run plank_sol_program_diff -- -fork=12
 ```
 
 The seed copy is optional once a local corpus already exists, but it helps a new
@@ -46,7 +64,8 @@ corpus reach valid structured programs immediately.
 Regenerate the tracked seed corpus after generator changes:
 
 ```bash
-RAPPIE_SOL_SOLX=/path/to/solx cargo run --bin seedgen -- --target 160
+RAPPIE_SOL_SOLX=/path/to/solx RAPPIE_SOL_SOLC=/path/to/solc \
+    cargo run --bin seedgen -- --target 160
 ```
 
 `seedgen` decodes deterministic candidate byte buffers, buckets the resulting
@@ -56,8 +75,9 @@ Plank/Solidity oracle, and rewrites `fuzz/seeds/plank_sol_program_diff/`.
 Replay a saved crash:
 
 ```bash
-RAPPIE_SOL_SOLX=/path/to/solx cargo +nightly fuzz run plank_sol_program_diff \
-    fuzz/artifacts/plank_sol_program_diff/<crash-file>
+RAPPIE_SOL_SOLX=/path/to/solx RAPPIE_SOL_SOLC=/path/to/solc \
+    cargo +nightly fuzz run plank_sol_program_diff \
+        fuzz/artifacts/plank_sol_program_diff/<crash-file>
 ```
 
 ## Oracle Scope
@@ -71,6 +91,10 @@ compares:
 - final nonzero storage slots
 
 Balances and gas are not currently oracle outputs.
+
+Every generated program is compiled and executed through the `solx` reference,
+all strict `solc` peers, and all configured Plank SIR/Sona backends. Any compile
+failure, execution failure, or trace mismatch in one backend rejects the case.
 
 ## Generated Programs
 

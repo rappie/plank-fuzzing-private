@@ -1,12 +1,17 @@
 use crate::{
     FuzzCase,
-    compiler::{plank::compile_plank_sources, solx::compile_solidity_source},
+    compiler::{plank::compile_plank_sources, solx::compile_solidity_backend},
     evm::{EvmTrace, run_bytecode_sequence},
     sources::PlankSourceSet,
 };
 use alloy_primitives::hex;
 use plank_driver::BackendKind;
 use std::fmt;
+
+pub use crate::compiler::solx::{
+    DEFAULT_SOLIDITY_BACKENDS, SOLIDITY_REFERENCE_BACKEND, SolidityBackendSpec,
+    SolidityCompilerKind, SolidityOptimizer,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendSpec {
@@ -165,6 +170,13 @@ pub struct Execution {
     pub trace: EvmTrace,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OracleExecutions {
+    pub reference: Execution,
+    pub solidity_peers: Vec<Execution>,
+    pub plank_backends: Vec<Execution>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MismatchReason {
     CallCount,
@@ -177,10 +189,10 @@ pub enum MismatchReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HarnessError {
     PlankCompile { backend: &'static str, diagnostics: String },
-    SolidityCompile { diagnostics: String },
+    SolidityCompile { backend: &'static str, diagnostics: String },
     PlankExecute { backend: &'static str, message: String },
-    SolidityExecute { message: String },
-    Mismatch { plank: Box<Execution>, solidity: Box<Execution>, reason: MismatchReason },
+    SolidityExecute { backend: &'static str, message: String },
+    Mismatch { candidate: Box<Execution>, reference: Box<Execution>, reason: MismatchReason },
 }
 
 pub fn compare_plank_solidity(case: &FuzzCase) -> Result<(), HarnessError> {
@@ -191,9 +203,7 @@ pub fn compare_plank_solidity(case: &FuzzCase) -> Result<(), HarnessError> {
     compare_source_set(&plank_sources, &solidity_source, &calldatas)
 }
 
-pub fn execute_plank_solidity(
-    case: &FuzzCase,
-) -> Result<(Vec<Execution>, Execution), HarnessError> {
+pub fn execute_plank_solidity(case: &FuzzCase) -> Result<OracleExecutions, HarnessError> {
     let plank_sources = case.plank_sources();
     let solidity_source = case.solidity_source();
     let calldatas = case.calldatas();
@@ -215,10 +225,14 @@ pub fn compare_source_set(
     solidity_source: &str,
     calldatas: &[Vec<u8>],
 ) -> Result<(), HarnessError> {
-    let (planks, solidity) = execute_source_set(plank_sources, solidity_source, calldatas)?;
+    let executions = execute_source_set(plank_sources, solidity_source, calldatas)?;
 
-    for plank in planks {
-        compare_traces(plank, solidity.clone())?;
+    for solidity_peer in executions.solidity_peers {
+        compare_traces(solidity_peer, executions.reference.clone())?;
+    }
+
+    for plank in executions.plank_backends {
+        compare_traces(plank, executions.reference.clone())?;
     }
 
     Ok(())
@@ -228,15 +242,16 @@ fn execute_source_set(
     plank_sources: &PlankSourceSet,
     solidity_source: &str,
     calldatas: &[Vec<u8>],
-) -> Result<(Vec<Execution>, Execution), HarnessError> {
-    let solidity_bytecode = compile_solidity_source(solidity_source)
-        .map_err(|err| HarnessError::SolidityCompile { diagnostics: err.to_string() })?;
-    let solidity = Execution {
-        name: "solidity",
-        trace: run_bytecode_sequence(&solidity_bytecode, calldatas)
-            .map_err(|err| HarnessError::SolidityExecute { message: err.to_string() })?,
-    };
-    let mut planks = Vec::with_capacity(DEFAULT_PLANK_BACKENDS.len());
+) -> Result<OracleExecutions, HarnessError> {
+    let reference =
+        execute_solidity_backend(SOLIDITY_REFERENCE_BACKEND, solidity_source, calldatas)?;
+    let mut solidity_peers = Vec::with_capacity(DEFAULT_SOLIDITY_BACKENDS.len());
+
+    for backend in DEFAULT_SOLIDITY_BACKENDS {
+        solidity_peers.push(execute_solidity_backend(backend, solidity_source, calldatas)?);
+    }
+
+    let mut plank_backends = Vec::with_capacity(DEFAULT_PLANK_BACKENDS.len());
 
     for backend in DEFAULT_PLANK_BACKENDS {
         let plank_bytecode =
@@ -250,10 +265,25 @@ fn execute_source_set(
             HarnessError::PlankExecute { backend: backend.name, message: err.to_string() }
         })?;
 
-        planks.push(Execution { name: backend.name, trace });
+        plank_backends.push(Execution { name: backend.name, trace });
     }
 
-    Ok((planks, solidity))
+    Ok(OracleExecutions { reference, solidity_peers, plank_backends })
+}
+
+fn execute_solidity_backend(
+    backend: SolidityBackendSpec,
+    solidity_source: &str,
+    calldatas: &[Vec<u8>],
+) -> Result<Execution, HarnessError> {
+    let bytecode = compile_solidity_backend(solidity_source, backend).map_err(|err| {
+        HarnessError::SolidityCompile { backend: backend.name, diagnostics: err.to_string() }
+    })?;
+    let trace = run_bytecode_sequence(&bytecode, calldatas).map_err(|err| {
+        HarnessError::SolidityExecute { backend: backend.name, message: err.to_string() }
+    })?;
+
+    Ok(Execution { name: backend.name, trace })
 }
 
 impl fmt::Display for HarnessError {
@@ -262,17 +292,17 @@ impl fmt::Display for HarnessError {
             Self::PlankCompile { backend, diagnostics } => {
                 write!(f, "{backend} compilation failed:\n{diagnostics}")
             }
-            Self::SolidityCompile { diagnostics } => {
-                write!(f, "Solidity compilation failed:\n{diagnostics}")
+            Self::SolidityCompile { backend, diagnostics } => {
+                write!(f, "{backend} compilation failed:\n{diagnostics}")
             }
             Self::PlankExecute { backend, message } => {
                 write!(f, "{backend} execution failed:\n{message}")
             }
-            Self::SolidityExecute { message } => {
-                write!(f, "Solidity execution failed:\n{message}")
+            Self::SolidityExecute { backend, message } => {
+                write!(f, "{backend} execution failed:\n{message}")
             }
-            Self::Mismatch { plank, solidity, reason } => {
-                render_mismatch(f, plank, solidity, *reason)
+            Self::Mismatch { candidate, reference, reason } => {
+                render_mismatch(f, candidate, reference, *reason)
             }
         }
     }
@@ -282,90 +312,93 @@ impl std::error::Error for HarnessError {}
 
 fn render_mismatch(
     f: &mut fmt::Formatter<'_>,
-    plank: &Execution,
-    solidity: &Execution,
+    candidate: &Execution,
+    reference: &Execution,
     reason: MismatchReason,
 ) -> fmt::Result {
     match reason {
         MismatchReason::CallCount => write!(
             f,
             "call count mismatch:\n{}={}\n{}={}",
-            plank.name,
-            plank.trace.calls.len(),
-            solidity.name,
-            solidity.trace.calls.len()
+            candidate.name,
+            candidate.trace.calls.len(),
+            reference.name,
+            reference.trace.calls.len()
         ),
         MismatchReason::CallSuccess { index } => write!(
             f,
             "call {index} success mismatch:\n{}={}\n{}={}",
-            plank.name,
-            plank.trace.calls[index].success,
-            solidity.name,
-            solidity.trace.calls[index].success
+            candidate.name,
+            candidate.trace.calls[index].success,
+            reference.name,
+            reference.trace.calls[index].success
         ),
         MismatchReason::CallOutput { index } => write!(
             f,
             "call {index} output mismatch:\n{}: 0x{}\n{}: 0x{}",
-            plank.name,
-            hex::encode(&plank.trace.calls[index].output),
-            solidity.name,
-            hex::encode(&solidity.trace.calls[index].output)
+            candidate.name,
+            hex::encode(&candidate.trace.calls[index].output),
+            reference.name,
+            hex::encode(&reference.trace.calls[index].output)
         ),
         MismatchReason::CallLogs { index } => write!(
             f,
             "call {index} log mismatch:\n{}: {:?}\n{}: {:?}",
-            plank.name,
-            plank.trace.calls[index].logs,
-            solidity.name,
-            solidity.trace.calls[index].logs
+            candidate.name,
+            candidate.trace.calls[index].logs,
+            reference.name,
+            reference.trace.calls[index].logs
         ),
         MismatchReason::FinalStorage => write!(
             f,
             "final storage mismatch:\n{}: {:?}\n{}: {:?}",
-            plank.name, plank.trace.final_storage, solidity.name, solidity.trace.final_storage
+            candidate.name,
+            candidate.trace.final_storage,
+            reference.name,
+            reference.trace.final_storage
         ),
     }
 }
 
-fn compare_traces(plank: Execution, solidity: Execution) -> Result<(), HarnessError> {
-    if plank.trace.calls.len() != solidity.trace.calls.len() {
+fn compare_traces(candidate: Execution, reference: Execution) -> Result<(), HarnessError> {
+    if candidate.trace.calls.len() != reference.trace.calls.len() {
         return Err(HarnessError::Mismatch {
-            plank: Box::new(plank),
-            solidity: Box::new(solidity),
+            candidate: Box::new(candidate),
+            reference: Box::new(reference),
             reason: MismatchReason::CallCount,
         });
     }
 
-    for index in 0..plank.trace.calls.len() {
-        if plank.trace.calls[index].success != solidity.trace.calls[index].success {
+    for index in 0..candidate.trace.calls.len() {
+        if candidate.trace.calls[index].success != reference.trace.calls[index].success {
             return Err(HarnessError::Mismatch {
-                plank: Box::new(plank),
-                solidity: Box::new(solidity),
+                candidate: Box::new(candidate),
+                reference: Box::new(reference),
                 reason: MismatchReason::CallSuccess { index },
             });
         }
 
-        if plank.trace.calls[index].output != solidity.trace.calls[index].output {
+        if candidate.trace.calls[index].output != reference.trace.calls[index].output {
             return Err(HarnessError::Mismatch {
-                plank: Box::new(plank),
-                solidity: Box::new(solidity),
+                candidate: Box::new(candidate),
+                reference: Box::new(reference),
                 reason: MismatchReason::CallOutput { index },
             });
         }
 
-        if plank.trace.calls[index].logs != solidity.trace.calls[index].logs {
+        if candidate.trace.calls[index].logs != reference.trace.calls[index].logs {
             return Err(HarnessError::Mismatch {
-                plank: Box::new(plank),
-                solidity: Box::new(solidity),
+                candidate: Box::new(candidate),
+                reference: Box::new(reference),
                 reason: MismatchReason::CallLogs { index },
             });
         }
     }
 
-    if plank.trace.final_storage != solidity.trace.final_storage {
+    if candidate.trace.final_storage != reference.trace.final_storage {
         return Err(HarnessError::Mismatch {
-            plank: Box::new(plank),
-            solidity: Box::new(solidity),
+            candidate: Box::new(candidate),
+            reference: Box::new(reference),
             reason: MismatchReason::FinalStorage,
         });
     }
@@ -375,7 +408,10 @@ fn compare_traces(plank: Execution, solidity: Execution) -> Result<(), HarnessEr
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_PLANK_BACKENDS, Execution, HarnessError, MismatchReason, compare_traces};
+    use super::{
+        DEFAULT_PLANK_BACKENDS, DEFAULT_SOLIDITY_BACKENDS, Execution, HarnessError, MismatchReason,
+        SolidityCompilerKind, SolidityOptimizer, compare_traces,
+    };
     use crate::{
         compiler::plank::compile_plank_sources,
         evm::{EvmCallResult, EvmTrace, ObservedLog, ObservedStorageSlot},
@@ -398,6 +434,51 @@ init {
         for backend in DEFAULT_PLANK_BACKENDS {
             assert!(names.insert(backend.name), "duplicate backend name {}", backend.name);
         }
+    }
+
+    #[test]
+    fn default_solidity_backend_set_has_expected_matrix_and_unique_names() {
+        assert_eq!(DEFAULT_SOLIDITY_BACKENDS.len(), 4);
+
+        let mut names = BTreeSet::new();
+        for backend in DEFAULT_SOLIDITY_BACKENDS {
+            assert!(names.insert(backend.name), "duplicate backend name {}", backend.name);
+        }
+
+        let actual = DEFAULT_SOLIDITY_BACKENDS
+            .iter()
+            .map(|backend| (backend.name, backend.compiler, backend.optimizer, backend.via_ir))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    "solc-noopt-legacy",
+                    SolidityCompilerKind::Solc,
+                    SolidityOptimizer::Disabled,
+                    false,
+                ),
+                (
+                    "solc-noopt-via-ir",
+                    SolidityCompilerKind::Solc,
+                    SolidityOptimizer::Disabled,
+                    true,
+                ),
+                (
+                    "solc-opt-legacy",
+                    SolidityCompilerKind::Solc,
+                    SolidityOptimizer::Enabled { runs: 200 },
+                    false,
+                ),
+                (
+                    "solc-opt-via-ir",
+                    SolidityCompilerKind::Solc,
+                    SolidityOptimizer::Enabled { runs: 200 },
+                    true,
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -450,7 +531,8 @@ init {
     #[test]
     fn compare_traces_accepts_matching_results() {
         let plank = Execution { name: "sir-debug", trace: trace(vec![call(true, vec![1])]) };
-        let solidity = Execution { name: "solidity", trace: trace(vec![call(true, vec![1])]) };
+        let solidity =
+            Execution { name: "solx-reference", trace: trace(vec![call(true, vec![1])]) };
 
         compare_traces(plank, solidity).expect("matching traces should pass");
     }
@@ -458,7 +540,7 @@ init {
     #[test]
     fn compare_traces_rejects_call_count_mismatch() {
         let plank = Execution { name: "sir-debug", trace: trace(vec![call(true, vec![])]) };
-        let solidity = Execution { name: "solidity", trace: trace(vec![]) };
+        let solidity = Execution { name: "solx-reference", trace: trace(vec![]) };
 
         assert!(matches!(
             compare_traces(plank, solidity),
@@ -473,7 +555,7 @@ init {
             trace: trace(vec![call(true, vec![]), call(false, vec![])]),
         };
         let solidity = Execution {
-            name: "solidity",
+            name: "solx-reference",
             trace: trace(vec![call(true, vec![]), call(true, vec![])]),
         };
 
@@ -486,7 +568,8 @@ init {
     #[test]
     fn compare_traces_rejects_indexed_output_mismatch() {
         let plank = Execution { name: "sir-debug", trace: trace(vec![call(true, vec![1])]) };
-        let solidity = Execution { name: "solidity", trace: trace(vec![call(true, vec![2])]) };
+        let solidity =
+            Execution { name: "solx-reference", trace: trace(vec![call(true, vec![2])]) };
 
         assert!(matches!(
             compare_traces(plank, solidity),
@@ -499,7 +582,7 @@ init {
         let mut left = call(true, vec![]);
         left.logs.push(ObservedLog { address: [1; 20], topics: vec![[2; 32]], data: vec![3] });
         let plank = Execution { name: "sir-debug", trace: trace(vec![left]) };
-        let solidity = Execution { name: "solidity", trace: trace(vec![call(true, vec![])]) };
+        let solidity = Execution { name: "solx-reference", trace: trace(vec![call(true, vec![])]) };
 
         assert!(matches!(
             compare_traces(plank, solidity),
@@ -512,7 +595,7 @@ init {
         let mut plank_trace = trace(vec![call(true, vec![])]);
         plank_trace.final_storage.push(ObservedStorageSlot { slot: [1; 32], value: [2; 32] });
         let plank = Execution { name: "sir-debug", trace: plank_trace };
-        let solidity = Execution { name: "solidity", trace: trace(vec![call(true, vec![])]) };
+        let solidity = Execution { name: "solx-reference", trace: trace(vec![call(true, vec![])]) };
 
         assert!(matches!(
             compare_traces(plank, solidity),
