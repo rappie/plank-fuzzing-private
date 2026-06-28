@@ -1,0 +1,7 @@
+[patch."https://github.com/fe-lang/sonatina"]
+sonatina-codegen = { path = "/tmp/sonatina-latest/crates/codegen" }
+sonatina-ir = { path = "/tmp/sonatina-latest/crates/ir" }
+sonatina-macros = { path = "/tmp/sonatina-latest/crates/macros" }
+sonatina-parser = { path = "/tmp/sonatina-latest/crates/parser" }
+sonatina-triple = { path = "/tmp/sonatina-latest/crates/triple" }
+sonatina-verifier = { path = "/tmp/sonatina-latest/crates/verifier" }
