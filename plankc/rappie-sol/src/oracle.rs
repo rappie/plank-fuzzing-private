@@ -248,7 +248,12 @@ fn execute_source_set(
     let mut solidity_peers = Vec::with_capacity(DEFAULT_SOLIDITY_BACKENDS.len());
 
     for backend in DEFAULT_SOLIDITY_BACKENDS {
-        solidity_peers.push(execute_solidity_backend(backend, solidity_source, calldatas)?);
+        match execute_solidity_backend(backend, solidity_source, calldatas) {
+            Ok(execution) => solidity_peers.push(execution),
+            Err(HarnessError::SolidityCompile { diagnostics, .. })
+                if is_skippable_solidity_peer_compile_error(backend, &diagnostics) => {}
+            Err(err) => return Err(err),
+        }
     }
 
     let mut plank_backends = Vec::with_capacity(DEFAULT_PLANK_BACKENDS.len());
@@ -269,6 +274,15 @@ fn execute_source_set(
     }
 
     Ok(OracleExecutions { reference, solidity_peers, plank_backends })
+}
+
+fn is_skippable_solidity_peer_compile_error(
+    backend: SolidityBackendSpec,
+    diagnostics: &str,
+) -> bool {
+    backend.compiler == SolidityCompilerKind::Solc
+        && !backend.via_ir
+        && diagnostics.contains("Stack too deep")
 }
 
 fn execute_solidity_backend(
@@ -545,6 +559,34 @@ init {
         assert!(matches!(
             compare_traces(plank, solidity),
             Err(HarnessError::Mismatch { reason: MismatchReason::CallCount, .. })
+        ));
+    }
+
+    #[test]
+    fn solc_legacy_stack_too_deep_is_skippable_for_peer_backends() {
+        assert!(super::is_skippable_solidity_peer_compile_error(
+            super::DEFAULT_SOLIDITY_BACKENDS[0],
+            "CompilerError: Stack too deep."
+        ));
+        assert!(super::is_skippable_solidity_peer_compile_error(
+            super::DEFAULT_SOLIDITY_BACKENDS[2],
+            "CompilerError: Stack too deep. Try compiling with `--via-ir`."
+        ));
+    }
+
+    #[test]
+    fn solc_via_ir_and_other_diagnostics_are_not_skippable() {
+        assert!(!super::is_skippable_solidity_peer_compile_error(
+            super::DEFAULT_SOLIDITY_BACKENDS[1],
+            "CompilerError: Stack too deep."
+        ));
+        assert!(!super::is_skippable_solidity_peer_compile_error(
+            super::DEFAULT_SOLIDITY_BACKENDS[3],
+            "CompilerError: Stack too deep."
+        ));
+        assert!(!super::is_skippable_solidity_peer_compile_error(
+            super::DEFAULT_SOLIDITY_BACKENDS[0],
+            "InternalCompilerError: badness"
         ));
     }
 
