@@ -48,10 +48,10 @@ The `solc` peers are invoked with `solc --standard-json`:
 
 ## Backend Configuration
 
-By default, the oracle runs the `solx-reference` reference backend, every `solc`
-peer above, and every configured Plank SIR/Sona backend. To filter that matrix,
-copy `backends.example.toml` to `backends.toml` in this directory, or set
-`RAPPIE_SOL_BACKENDS_CONFIG=/path/to/backends.toml`.
+By default, the oracle reads `backends.toml` in this directory and tests the
+`solx-reference` reference backend against `sir-debug` and `sir-release-csudl`.
+Set `RAPPIE_SOL_BACKENDS_CONFIG=/path/to/backends.toml` to use another backend
+matrix.
 
 The `reference` value must name a known Solidity backend and remains required as
 the comparison oracle. Entries in `[solidity]` and `[plank]` enable or disable

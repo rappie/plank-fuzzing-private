@@ -1,0 +1,47 @@
+reference = "solx-reference"
+
+[solidity]
+solx-reference = false
+solc-noopt-legacy = false
+solc-noopt-via-ir = false
+solc-opt-legacy = false
+solc-opt-via-ir = false
+
+[plank]
+sir-debug = true
+sir-release = false
+sir-release-c = false
+sir-release-s = false
+sir-release-u = false
+sir-release-d = false
+sir-release-l = false
+sir-release-cs = false
+sir-release-cu = false
+sir-release-cd = false
+sir-release-cl = false
+sir-release-su = false
+sir-release-sd = false
+sir-release-sl = false
+sir-release-ud = false
+sir-release-ul = false
+sir-release-dl = false
+sir-release-csu = false
+sir-release-csd = false
+sir-release-csl = false
+sir-release-cud = false
+sir-release-cul = false
+sir-release-cdl = false
+sir-release-sud = false
+sir-release-sul = false
+sir-release-sdl = false
+sir-release-udl = false
+sir-release-csud = false
+sir-release-csul = false
+sir-release-csdl = false
+sir-release-cudl = false
+sir-release-sudl = false
+sir-release-csudl = true
+sona-o0 = false
+sona-o1 = false
+sona-os = false
+sona-o2 = false
