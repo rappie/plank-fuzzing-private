@@ -2,5 +2,6 @@
 .vscode
 .idea
 /tmp/
+/rappie-sol/backends.toml
 
 .DS_Store

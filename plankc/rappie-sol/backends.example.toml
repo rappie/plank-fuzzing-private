@@ -1,0 +1,50 @@
+# Copy this file to backends.toml or set RAPPIE_SOL_BACKENDS_CONFIG to point at
+# another TOML file. Omitted backend entries keep their default value.
+
+reference = "solx-reference"
+
+[solidity]
+solx-reference = false
+solc-noopt-legacy = true
+solc-noopt-via-ir = true
+solc-opt-legacy = true
+solc-opt-via-ir = true
+
+[plank]
+sir-debug = true
+sir-release = true
+sir-release-s = true
+sir-release-c = true
+sir-release-u = true
+sir-release-d = true
+sir-release-l = true
+sir-release-sc = true
+sir-release-su = true
+sir-release-sd = true
+sir-release-sl = true
+sir-release-cu = true
+sir-release-cd = true
+sir-release-cl = true
+sir-release-ud = true
+sir-release-ul = true
+sir-release-dl = true
+sir-release-scu = true
+sir-release-scd = true
+sir-release-scl = true
+sir-release-sud = true
+sir-release-sul = true
+sir-release-sdl = true
+sir-release-cud = true
+sir-release-cul = true
+sir-release-cdl = true
+sir-release-udl = true
+sir-release-scud = true
+sir-release-scul = true
+sir-release-scdl = true
+sir-release-sudl = true
+sir-release-cudl = true
+sir-release-scudl = true
+sona-o0 = true
+sona-o1 = true
+sona-os = true
+sona-o2 = true

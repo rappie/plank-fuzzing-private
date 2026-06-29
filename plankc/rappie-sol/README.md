@@ -46,6 +46,18 @@ The `solc` peers are invoked with `solc --standard-json`:
 - `solc-opt-legacy`: optimizer enabled with `runs = 200`, `viaIR = false`
 - `solc-opt-via-ir`: optimizer enabled with `runs = 200`, `viaIR = true`
 
+## Backend Configuration
+
+By default, the oracle runs the `solx-reference` reference backend, every `solc`
+peer above, and every configured Plank SIR/Sona backend. To filter that matrix,
+copy `backends.example.toml` to `backends.toml` in this directory, or set
+`RAPPIE_SOL_BACKENDS_CONFIG=/path/to/backends.toml`.
+
+The `reference` value must name a known Solidity backend and remains required as
+the comparison oracle. Entries in `[solidity]` and `[plank]` enable or disable
+known backends by name; omitted entries keep their default value. Unknown backend
+names or a config that disables every candidate backend are reported as errors.
+
 ## Running
 
 From `plankc/rappie-sol/`:

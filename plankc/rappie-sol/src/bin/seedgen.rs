@@ -7,6 +7,7 @@ use rappie_sol::{
     FuzzCase, SeedClassification, SeedExitKind, SeedProgramMode, execute_plank_solidity,
 };
 use revm as _;
+use serde as _;
 use serde_json as _;
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -16,6 +17,7 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
 };
+use toml as _;
 
 const DEFAULT_TARGET: usize = 320;
 const DEFAULT_CANDIDATE_LIMIT: usize = 300_000;

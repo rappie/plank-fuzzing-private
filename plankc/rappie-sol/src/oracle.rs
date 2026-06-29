@@ -1,5 +1,5 @@
 use crate::{
-    FuzzCase,
+    BackendConfigError, FuzzCase, OracleBackendSet,
     compiler::{plank::compile_plank_sources, solx::compile_solidity_backend},
     evm::{EvmTrace, run_bytecode_sequence},
     sources::PlankSourceSet,
@@ -188,6 +188,7 @@ pub enum MismatchReason {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HarnessError {
+    Config(BackendConfigError),
     PlankCompile { backend: &'static str, diagnostics: String },
     SolidityCompile { backend: &'static str, diagnostics: String },
     PlankExecute { backend: &'static str, message: String },
@@ -196,19 +197,35 @@ pub enum HarnessError {
 }
 
 pub fn compare_plank_solidity(case: &FuzzCase) -> Result<(), HarnessError> {
+    let backends = OracleBackendSet::configured().map_err(HarnessError::Config)?;
+    compare_plank_solidity_with_backends(case, backends)
+}
+
+pub fn compare_plank_solidity_with_backends(
+    case: &FuzzCase,
+    backends: &OracleBackendSet,
+) -> Result<(), HarnessError> {
     let plank_sources = case.plank_sources();
     let solidity_source = case.solidity_source();
     let calldatas = case.calldatas();
 
-    compare_source_set(&plank_sources, &solidity_source, &calldatas)
+    compare_source_set_with_backends(&plank_sources, &solidity_source, &calldatas, backends)
 }
 
 pub fn execute_plank_solidity(case: &FuzzCase) -> Result<OracleExecutions, HarnessError> {
+    let backends = OracleBackendSet::configured().map_err(HarnessError::Config)?;
+    execute_plank_solidity_with_backends(case, backends)
+}
+
+pub fn execute_plank_solidity_with_backends(
+    case: &FuzzCase,
+    backends: &OracleBackendSet,
+) -> Result<OracleExecutions, HarnessError> {
     let plank_sources = case.plank_sources();
     let solidity_source = case.solidity_source();
     let calldatas = case.calldatas();
 
-    execute_source_set(&plank_sources, &solidity_source, &calldatas)
+    execute_source_set(&plank_sources, &solidity_source, &calldatas, backends)
 }
 
 pub fn compare_sources(
@@ -216,8 +233,18 @@ pub fn compare_sources(
     solidity_source: &str,
     calldatas: &[Vec<u8>],
 ) -> Result<(), HarnessError> {
+    let backends = OracleBackendSet::configured().map_err(HarnessError::Config)?;
+    compare_sources_with_backends(plank_source, solidity_source, calldatas, backends)
+}
+
+pub fn compare_sources_with_backends(
+    plank_source: &str,
+    solidity_source: &str,
+    calldatas: &[Vec<u8>],
+    backends: &OracleBackendSet,
+) -> Result<(), HarnessError> {
     let plank_sources = PlankSourceSet::single_main(plank_source.to_string());
-    compare_source_set(&plank_sources, solidity_source, calldatas)
+    compare_source_set_with_backends(&plank_sources, solidity_source, calldatas, backends)
 }
 
 pub fn compare_source_set(
@@ -225,7 +252,17 @@ pub fn compare_source_set(
     solidity_source: &str,
     calldatas: &[Vec<u8>],
 ) -> Result<(), HarnessError> {
-    let executions = execute_source_set(plank_sources, solidity_source, calldatas)?;
+    let backends = OracleBackendSet::configured().map_err(HarnessError::Config)?;
+    compare_source_set_with_backends(plank_sources, solidity_source, calldatas, backends)
+}
+
+pub fn compare_source_set_with_backends(
+    plank_sources: &PlankSourceSet,
+    solidity_source: &str,
+    calldatas: &[Vec<u8>],
+    backends: &OracleBackendSet,
+) -> Result<(), HarnessError> {
+    let executions = execute_source_set(plank_sources, solidity_source, calldatas, backends)?;
 
     for solidity_peer in executions.solidity_peers {
         compare_traces(solidity_peer, executions.reference.clone())?;
@@ -242,12 +279,12 @@ fn execute_source_set(
     plank_sources: &PlankSourceSet,
     solidity_source: &str,
     calldatas: &[Vec<u8>],
+    backends: &OracleBackendSet,
 ) -> Result<OracleExecutions, HarnessError> {
-    let reference =
-        execute_solidity_backend(SOLIDITY_REFERENCE_BACKEND, solidity_source, calldatas)?;
-    let mut solidity_peers = Vec::with_capacity(DEFAULT_SOLIDITY_BACKENDS.len());
+    let reference = execute_solidity_backend(backends.reference, solidity_source, calldatas)?;
+    let mut solidity_peers = Vec::with_capacity(backends.solidity_peers.len());
 
-    for backend in DEFAULT_SOLIDITY_BACKENDS {
+    for &backend in &backends.solidity_peers {
         match execute_solidity_backend(backend, solidity_source, calldatas) {
             Ok(execution) => solidity_peers.push(execution),
             Err(HarnessError::SolidityCompile { diagnostics, .. })
@@ -256,9 +293,9 @@ fn execute_source_set(
         }
     }
 
-    let mut plank_backends = Vec::with_capacity(DEFAULT_PLANK_BACKENDS.len());
+    let mut plank_backends = Vec::with_capacity(backends.plank_backends.len());
 
-    for backend in DEFAULT_PLANK_BACKENDS {
+    for &backend in &backends.plank_backends {
         let plank_bytecode =
             compile_plank_sources(plank_sources, backend.kind, backend.optimizations).map_err(
                 |err| HarnessError::PlankCompile {
@@ -303,6 +340,7 @@ fn execute_solidity_backend(
 impl fmt::Display for HarnessError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Config(err) => write!(f, "backend config failed:\n{err}"),
             Self::PlankCompile { backend, diagnostics } => {
                 write!(f, "{backend} compilation failed:\n{diagnostics}")
             }
