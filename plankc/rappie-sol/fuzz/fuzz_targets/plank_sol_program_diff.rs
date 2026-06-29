@@ -3,6 +3,12 @@
 use libfuzzer_sys::fuzz_target;
 use rappie_sol::{FuzzCase, compare_plank_solidity};
 
+#[unsafe(no_mangle)]
+pub extern "C" fn __asan_default_options() -> *const std::ffi::c_char {
+    static OPTIONS: &[u8] = b"quarantine_size_mb=16:malloc_context_size=8\0";
+    OPTIONS.as_ptr().cast()
+}
+
 fuzz_target!(|case: FuzzCase| {
     if let Err(err) = compare_plank_solidity(&case) {
         let plank_sources = case.plank_sources_display();
