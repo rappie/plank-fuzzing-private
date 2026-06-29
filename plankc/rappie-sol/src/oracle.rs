@@ -23,30 +23,15 @@ pub struct BackendSpec {
 pub const DEFAULT_PLANK_BACKENDS: [BackendSpec; 37] = [
     BackendSpec { name: "sir-debug", kind: BackendKind::SirDebug, optimizations: None },
     BackendSpec { name: "sir-release", kind: BackendKind::SirRelease, optimizations: None },
-    BackendSpec { name: "sir-release-s", kind: BackendKind::SirRelease, optimizations: Some("s") },
     BackendSpec { name: "sir-release-c", kind: BackendKind::SirRelease, optimizations: Some("c") },
+    BackendSpec { name: "sir-release-s", kind: BackendKind::SirRelease, optimizations: Some("s") },
     BackendSpec { name: "sir-release-u", kind: BackendKind::SirRelease, optimizations: Some("u") },
     BackendSpec { name: "sir-release-d", kind: BackendKind::SirRelease, optimizations: Some("d") },
     BackendSpec { name: "sir-release-l", kind: BackendKind::SirRelease, optimizations: Some("l") },
     BackendSpec {
-        name: "sir-release-sc",
+        name: "sir-release-cs",
         kind: BackendKind::SirRelease,
-        optimizations: Some("sc"),
-    },
-    BackendSpec {
-        name: "sir-release-su",
-        kind: BackendKind::SirRelease,
-        optimizations: Some("su"),
-    },
-    BackendSpec {
-        name: "sir-release-sd",
-        kind: BackendKind::SirRelease,
-        optimizations: Some("sd"),
-    },
-    BackendSpec {
-        name: "sir-release-sl",
-        kind: BackendKind::SirRelease,
-        optimizations: Some("sl"),
+        optimizations: Some("cs"),
     },
     BackendSpec {
         name: "sir-release-cu",
@@ -64,6 +49,21 @@ pub const DEFAULT_PLANK_BACKENDS: [BackendSpec; 37] = [
         optimizations: Some("cl"),
     },
     BackendSpec {
+        name: "sir-release-su",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("su"),
+    },
+    BackendSpec {
+        name: "sir-release-sd",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("sd"),
+    },
+    BackendSpec {
+        name: "sir-release-sl",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("sl"),
+    },
+    BackendSpec {
         name: "sir-release-ud",
         kind: BackendKind::SirRelease,
         optimizations: Some("ud"),
@@ -79,34 +79,19 @@ pub const DEFAULT_PLANK_BACKENDS: [BackendSpec; 37] = [
         optimizations: Some("dl"),
     },
     BackendSpec {
-        name: "sir-release-scu",
+        name: "sir-release-csu",
         kind: BackendKind::SirRelease,
-        optimizations: Some("scu"),
+        optimizations: Some("csu"),
     },
     BackendSpec {
-        name: "sir-release-scd",
+        name: "sir-release-csd",
         kind: BackendKind::SirRelease,
-        optimizations: Some("scd"),
+        optimizations: Some("csd"),
     },
     BackendSpec {
-        name: "sir-release-scl",
+        name: "sir-release-csl",
         kind: BackendKind::SirRelease,
-        optimizations: Some("scl"),
-    },
-    BackendSpec {
-        name: "sir-release-sud",
-        kind: BackendKind::SirRelease,
-        optimizations: Some("sud"),
-    },
-    BackendSpec {
-        name: "sir-release-sul",
-        kind: BackendKind::SirRelease,
-        optimizations: Some("sul"),
-    },
-    BackendSpec {
-        name: "sir-release-sdl",
-        kind: BackendKind::SirRelease,
-        optimizations: Some("sdl"),
+        optimizations: Some("csl"),
     },
     BackendSpec {
         name: "sir-release-cud",
@@ -124,29 +109,39 @@ pub const DEFAULT_PLANK_BACKENDS: [BackendSpec; 37] = [
         optimizations: Some("cdl"),
     },
     BackendSpec {
+        name: "sir-release-sud",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("sud"),
+    },
+    BackendSpec {
+        name: "sir-release-sul",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("sul"),
+    },
+    BackendSpec {
+        name: "sir-release-sdl",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("sdl"),
+    },
+    BackendSpec {
         name: "sir-release-udl",
         kind: BackendKind::SirRelease,
         optimizations: Some("udl"),
     },
     BackendSpec {
-        name: "sir-release-scud",
+        name: "sir-release-csud",
         kind: BackendKind::SirRelease,
-        optimizations: Some("scud"),
+        optimizations: Some("csud"),
     },
     BackendSpec {
-        name: "sir-release-scul",
+        name: "sir-release-csul",
         kind: BackendKind::SirRelease,
-        optimizations: Some("scul"),
+        optimizations: Some("csul"),
     },
     BackendSpec {
-        name: "sir-release-scdl",
+        name: "sir-release-csdl",
         kind: BackendKind::SirRelease,
-        optimizations: Some("scdl"),
-    },
-    BackendSpec {
-        name: "sir-release-sudl",
-        kind: BackendKind::SirRelease,
-        optimizations: Some("sudl"),
+        optimizations: Some("csdl"),
     },
     BackendSpec {
         name: "sir-release-cudl",
@@ -154,9 +149,14 @@ pub const DEFAULT_PLANK_BACKENDS: [BackendSpec; 37] = [
         optimizations: Some("cudl"),
     },
     BackendSpec {
-        name: "sir-release-scudl",
+        name: "sir-release-sudl",
         kind: BackendKind::SirRelease,
-        optimizations: Some("scudl"),
+        optimizations: Some("sudl"),
+    },
+    BackendSpec {
+        name: "sir-release-csudl",
+        kind: BackendKind::SirRelease,
+        optimizations: Some("csudl"),
     },
     BackendSpec { name: "sona-o0", kind: BackendKind::Sona, optimizations: Some("O0") },
     BackendSpec { name: "sona-o1", kind: BackendKind::Sona, optimizations: Some("O1") },
@@ -534,7 +534,7 @@ init {
     }
 
     #[test]
-    fn default_backend_set_contains_sir_release_optimization_subsets_in_scudl_order() {
+    fn default_backend_set_contains_sir_release_optimization_subsets_in_csudl_order() {
         let actual = DEFAULT_PLANK_BACKENDS
             .iter()
             .filter(|backend| backend.kind == BackendKind::SirRelease)
@@ -544,9 +544,9 @@ init {
         assert_eq!(
             actual,
             vec![
-                "s", "c", "u", "d", "l", "sc", "su", "sd", "sl", "cu", "cd", "cl", "ud", "ul",
-                "dl", "scu", "scd", "scl", "sud", "sul", "sdl", "cud", "cul", "cdl", "udl", "scud",
-                "scul", "scdl", "sudl", "cudl", "scudl",
+                "c", "s", "u", "d", "l", "cs", "cu", "cd", "cl", "su", "sd", "sl", "ud", "ul",
+                "dl", "csu", "csd", "csl", "cud", "cul", "cdl", "sud", "sul", "sdl", "udl", "csud",
+                "csul", "csdl", "cudl", "sudl", "csudl",
             ]
         );
     }

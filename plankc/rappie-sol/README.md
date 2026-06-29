@@ -57,6 +57,7 @@ The `reference` value must name a known Solidity backend and remains required as
 the comparison oracle. Entries in `[solidity]` and `[plank]` enable or disable
 known backends by name; omitted entries keep their default value. Unknown backend
 names or a config that disables every candidate backend are reported as errors.
+The full SIR release optimization backend is named `sir-release-csudl`.
 
 ## Running
 

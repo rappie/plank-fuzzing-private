@@ -54,7 +54,13 @@ impl OracleBackendSet {
 
     pub fn load_configured() -> Result<Self, BackendConfigError> {
         let (path, explicit) = configured_path();
-        Self::load_from_optional_path(&path, !explicit)
+        let backends = Self::load_from_optional_path(&path, !explicit)?;
+        eprintln!(
+            "rappie-sol testing {} backends: {}",
+            backends.backend_count(),
+            backends.backend_names_csv()
+        );
+        Ok(backends)
     }
 
     pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self, BackendConfigError> {
@@ -63,6 +69,21 @@ impl OracleBackendSet {
 
     pub fn from_toml_str(contents: &str) -> Result<Self, BackendConfigError> {
         Self::from_toml_str_with_path(contents, None)
+    }
+
+    pub fn backend_names_csv(&self) -> String {
+        self.backend_names().join(", ")
+    }
+
+    fn backend_count(&self) -> usize {
+        1 + self.solidity_peers.len() + self.plank_backends.len()
+    }
+
+    fn backend_names(&self) -> Vec<&'static str> {
+        std::iter::once(self.reference.name)
+            .chain(self.solidity_peers.iter().map(|backend| backend.name))
+            .chain(self.plank_backends.iter().map(|backend| backend.name))
+            .collect()
     }
 
     fn load_from_optional_path(
@@ -354,5 +375,28 @@ sir-release-s = false
             backends.plank_backends.iter().take(4).map(|backend| backend.name).collect::<Vec<_>>();
 
         assert_eq!(actual, vec!["sir-debug", "sir-release-c", "sir-release-u", "sir-release-d"]);
+    }
+
+    #[test]
+    fn backend_names_csv_lists_reference_then_candidates() {
+        let backends = OracleBackendSet::from_toml_str(
+            r#"
+reference = "solc-noopt-via-ir"
+
+[solidity]
+solx-reference = true
+
+[plank]
+sir-debug = true
+"#,
+        )
+        .expect("config should parse");
+
+        assert!(
+            backends.backend_names_csv().starts_with(
+                "solc-noopt-via-ir, solx-reference, solc-noopt-legacy, solc-opt-legacy"
+            )
+        );
+        assert!(backends.backend_names_csv().contains(", sir-debug, sir-release"));
     }
 }
