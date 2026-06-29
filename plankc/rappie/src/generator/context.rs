@@ -77,12 +77,12 @@ impl GenerationContext {
 
     pub(crate) fn has_u256_values(&self) -> bool {
         self.input_words > 0
-            || self.params.iter().any(|param| *param == ValueType::U256)
+            || self.params.contains(&ValueType::U256)
             || !self.u256_locals.is_empty()
     }
 
     pub(crate) fn has_bool_values(&self) -> bool {
-        self.params.iter().any(|param| *param == ValueType::Bool) || !self.bool_locals.is_empty()
+        self.params.contains(&ValueType::Bool) || !self.bool_locals.is_empty()
     }
 
     pub(crate) fn has_mutable_u256_values(&self) -> bool {
