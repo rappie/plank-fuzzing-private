@@ -7,7 +7,7 @@ mod oracle;
 mod sources;
 
 pub use case::FuzzCase;
-pub use config::{BackendConfigError, OracleBackendSet};
+pub use config::{BackendConfigError, OracleBackendSet, OracleBackendSpec};
 pub use evm::{EvmCallResult, EvmTrace};
 pub use generator::{SeedClassification, SeedExitKind, SeedProgramMode};
 pub use oracle::{

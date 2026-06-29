@@ -17,9 +17,8 @@ Install `cargo-fuzz` once:
 cargo install cargo-fuzz
 ```
 
-Provide native `solx` and `solc` binaries. `solx` remains the Solidity
-reference compiler. `solc` is also run as a strict Solidity peer backend across
-optimizer and via-IR modes.
+Provide native `solx` and `solc` binaries when enabling Solidity backends.
+Plank-only backend configurations do not require either Solidity compiler.
 
 The harness resolves `solx` in this order:
 
@@ -49,15 +48,24 @@ The `solc` peers are invoked with `solc --standard-json`:
 ## Backend Configuration
 
 By default, the oracle reads `backends.toml` in this directory and tests the
-`solx-reference` reference backend against `sir-debug` and `sir-release-csudl`.
+enabled backends listed under `[backends]`. The first enabled backend in the
+stable registry order is used internally as the comparison baseline, and every
+later enabled backend is compared against it.
 Set `RAPPIE_SOL_BACKENDS_CONFIG=/path/to/backends.toml` to use another backend
 matrix.
 
-The `reference` value must name a known Solidity backend and remains required as
-the comparison oracle. Entries in `[solidity]` and `[plank]` enable or disable
-known backends by name; omitted entries keep their default value. Unknown backend
-names or a config that disables every candidate backend are reported as errors.
-The full SIR release optimization backend is named `sir-release-csudl`.
+Config files use a single toggle table:
+
+```toml
+[backends]
+sir-debug = true
+sir-release-csudl = true
+solx-reference = false
+```
+
+Omitted backend names default to disabled. Unknown backend names or a config that
+enables fewer than two backends are reported as errors. The full SIR release
+optimization backend is named `sir-release-csudl`.
 
 ## Running
 
@@ -105,9 +113,10 @@ compares:
 
 Balances and gas are not currently oracle outputs.
 
-Every generated program is compiled and executed through the `solx` reference,
-all strict `solc` peers, and all configured Plank SIR/Sona backends. Any compile
-failure, execution failure, or trace mismatch in one backend rejects the case.
+Every generated program is compiled and executed through every enabled backend.
+Any compile failure, execution failure, or trace mismatch in one backend rejects
+the case. Known Solidity legacy "Stack too deep" compile errors remain skippable
+for non-baseline Solidity backends.
 
 ## Generated Programs
 

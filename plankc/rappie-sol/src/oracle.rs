@@ -1,6 +1,7 @@
 use crate::{
-    BackendConfigError, FuzzCase, OracleBackendSet,
+    FuzzCase,
     compiler::{plank::compile_plank_sources, solx::compile_solidity_backend},
+    config::{BackendConfigError, OracleBackendSet, OracleBackendSpec, validate_backend_count},
     evm::{EvmTrace, run_bytecode_sequence},
     sources::PlankSourceSet,
 };
@@ -173,8 +174,7 @@ pub struct Execution {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OracleExecutions {
     pub reference: Execution,
-    pub solidity_peers: Vec<Execution>,
-    pub plank_backends: Vec<Execution>,
+    pub candidates: Vec<Execution>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -264,12 +264,8 @@ pub fn compare_source_set_with_backends(
 ) -> Result<(), HarnessError> {
     let executions = execute_source_set(plank_sources, solidity_source, calldatas, backends)?;
 
-    for solidity_peer in executions.solidity_peers {
-        compare_traces(solidity_peer, executions.reference.clone())?;
-    }
-
-    for plank in executions.plank_backends {
-        compare_traces(plank, executions.reference.clone())?;
+    for candidate in executions.candidates {
+        compare_traces(candidate, executions.reference.clone())?;
     }
 
     Ok(())
@@ -281,45 +277,67 @@ fn execute_source_set(
     calldatas: &[Vec<u8>],
     backends: &OracleBackendSet,
 ) -> Result<OracleExecutions, HarnessError> {
-    let reference = execute_solidity_backend(backends.reference, solidity_source, calldatas)?;
-    let mut solidity_peers = Vec::with_capacity(backends.solidity_peers.len());
+    validate_backend_count(backends.backends.len()).map_err(HarnessError::Config)?;
 
-    for &backend in &backends.solidity_peers {
-        match execute_solidity_backend(backend, solidity_source, calldatas) {
-            Ok(execution) => solidity_peers.push(execution),
+    let (&reference_backend, candidate_backends) =
+        backends.backends.split_first().expect("backend count was already validated");
+    let reference = execute_backend(reference_backend, plank_sources, solidity_source, calldatas)?;
+    let mut candidates = Vec::with_capacity(candidate_backends.len());
+
+    for &backend in candidate_backends {
+        match execute_backend(backend, plank_sources, solidity_source, calldatas) {
+            Ok(execution) => candidates.push(execution),
             Err(HarnessError::SolidityCompile { diagnostics, .. })
                 if is_skippable_solidity_peer_compile_error(backend, &diagnostics) => {}
             Err(err) => return Err(err),
         }
     }
 
-    let mut plank_backends = Vec::with_capacity(backends.plank_backends.len());
-
-    for &backend in &backends.plank_backends {
-        let plank_bytecode =
-            compile_plank_sources(plank_sources, backend.kind, backend.optimizations).map_err(
-                |err| HarnessError::PlankCompile {
-                    backend: backend.name,
-                    diagnostics: err.diagnostics().to_string(),
-                },
-            )?;
-        let trace = run_bytecode_sequence(&plank_bytecode, calldatas).map_err(|err| {
-            HarnessError::PlankExecute { backend: backend.name, message: err.to_string() }
-        })?;
-
-        plank_backends.push(Execution { name: backend.name, trace });
-    }
-
-    Ok(OracleExecutions { reference, solidity_peers, plank_backends })
+    Ok(OracleExecutions { reference, candidates })
 }
 
-fn is_skippable_solidity_peer_compile_error(
-    backend: SolidityBackendSpec,
-    diagnostics: &str,
-) -> bool {
-    backend.compiler == SolidityCompilerKind::Solc
-        && !backend.via_ir
-        && diagnostics.contains("Stack too deep")
+fn execute_backend(
+    backend: OracleBackendSpec,
+    plank_sources: &PlankSourceSet,
+    solidity_source: &str,
+    calldatas: &[Vec<u8>],
+) -> Result<Execution, HarnessError> {
+    match backend {
+        OracleBackendSpec::Solidity(backend) => {
+            execute_solidity_backend(backend, solidity_source, calldatas)
+        }
+        OracleBackendSpec::Plank(backend) => {
+            execute_plank_backend(backend, plank_sources, calldatas)
+        }
+    }
+}
+
+fn execute_plank_backend(
+    backend: BackendSpec,
+    plank_sources: &PlankSourceSet,
+    calldatas: &[Vec<u8>],
+) -> Result<Execution, HarnessError> {
+    let plank_bytecode = compile_plank_sources(plank_sources, backend.kind, backend.optimizations)
+        .map_err(|err| HarnessError::PlankCompile {
+            backend: backend.name,
+            diagnostics: err.diagnostics().to_string(),
+        })?;
+    let trace = run_bytecode_sequence(&plank_bytecode, calldatas).map_err(|err| {
+        HarnessError::PlankExecute { backend: backend.name, message: err.to_string() }
+    })?;
+
+    Ok(Execution { name: backend.name, trace })
+}
+
+fn is_skippable_solidity_peer_compile_error(backend: OracleBackendSpec, diagnostics: &str) -> bool {
+    matches!(
+        backend,
+        OracleBackendSpec::Solidity(SolidityBackendSpec {
+            compiler: SolidityCompilerKind::Solc,
+            via_ir: false,
+            ..
+        })
+    ) && diagnostics.contains("Stack too deep")
 }
 
 fn execute_solidity_backend(
@@ -462,9 +480,10 @@ fn compare_traces(candidate: Execution, reference: Execution) -> Result<(), Harn
 mod tests {
     use super::{
         DEFAULT_PLANK_BACKENDS, DEFAULT_SOLIDITY_BACKENDS, Execution, HarnessError, MismatchReason,
-        SolidityCompilerKind, SolidityOptimizer, compare_traces,
+        SolidityCompilerKind, SolidityOptimizer, compare_source_set_with_backends, compare_traces,
     };
     use crate::{
+        OracleBackendSet, OracleBackendSpec,
         compiler::plank::compile_plank_sources,
         evm::{EvmCallResult, EvmTrace, ObservedLog, ObservedStorageSlot},
         sources::PlankSourceSet,
@@ -581,6 +600,38 @@ init {
     }
 
     #[test]
+    fn compare_source_set_accepts_plank_only_backends() {
+        let sources = PlankSourceSet::single_main(SMALL_PROGRAM.to_string());
+        let sir_release_csudl = DEFAULT_PLANK_BACKENDS
+            .iter()
+            .find(|backend| backend.name == "sir-release-csudl")
+            .copied()
+            .expect("backend should be registered");
+        let backends = OracleBackendSet {
+            backends: vec![
+                OracleBackendSpec::Plank(DEFAULT_PLANK_BACKENDS[0]),
+                OracleBackendSpec::Plank(sir_release_csudl),
+            ],
+        };
+
+        compare_source_set_with_backends(&sources, "", &[], &backends)
+            .expect("matching Plank backends should compare");
+    }
+
+    #[test]
+    fn execute_source_set_rejects_manual_too_few_backends() {
+        let sources = PlankSourceSet::single_main(SMALL_PROGRAM.to_string());
+        let backends = OracleBackendSet {
+            backends: vec![OracleBackendSpec::Plank(DEFAULT_PLANK_BACKENDS[0])],
+        };
+
+        assert!(matches!(
+            super::execute_source_set(&sources, "", &[], &backends),
+            Err(HarnessError::Config(super::BackendConfigError::TooFewBackends { enabled: 1 }))
+        ));
+    }
+
+    #[test]
     fn compare_traces_accepts_matching_results() {
         let plank = Execution { name: "sir-debug", trace: trace(vec![call(true, vec![1])]) };
         let solidity =
@@ -603,11 +654,11 @@ init {
     #[test]
     fn solc_legacy_stack_too_deep_is_skippable_for_peer_backends() {
         assert!(super::is_skippable_solidity_peer_compile_error(
-            super::DEFAULT_SOLIDITY_BACKENDS[0],
+            OracleBackendSpec::Solidity(super::DEFAULT_SOLIDITY_BACKENDS[0]),
             "CompilerError: Stack too deep."
         ));
         assert!(super::is_skippable_solidity_peer_compile_error(
-            super::DEFAULT_SOLIDITY_BACKENDS[2],
+            OracleBackendSpec::Solidity(super::DEFAULT_SOLIDITY_BACKENDS[2]),
             "CompilerError: Stack too deep. Try compiling with `--via-ir`."
         ));
     }
@@ -615,16 +666,20 @@ init {
     #[test]
     fn solc_via_ir_and_other_diagnostics_are_not_skippable() {
         assert!(!super::is_skippable_solidity_peer_compile_error(
-            super::DEFAULT_SOLIDITY_BACKENDS[1],
+            OracleBackendSpec::Solidity(super::DEFAULT_SOLIDITY_BACKENDS[1]),
             "CompilerError: Stack too deep."
         ));
         assert!(!super::is_skippable_solidity_peer_compile_error(
-            super::DEFAULT_SOLIDITY_BACKENDS[3],
+            OracleBackendSpec::Solidity(super::DEFAULT_SOLIDITY_BACKENDS[3]),
             "CompilerError: Stack too deep."
         ));
         assert!(!super::is_skippable_solidity_peer_compile_error(
-            super::DEFAULT_SOLIDITY_BACKENDS[0],
+            OracleBackendSpec::Solidity(super::DEFAULT_SOLIDITY_BACKENDS[0]),
             "InternalCompilerError: badness"
+        ));
+        assert!(!super::is_skippable_solidity_peer_compile_error(
+            OracleBackendSpec::Plank(super::DEFAULT_PLANK_BACKENDS[0]),
+            "CompilerError: Stack too deep."
         ));
     }
 

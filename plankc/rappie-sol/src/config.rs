@@ -12,36 +12,44 @@ use std::{
 
 const CONFIG_ENV_VAR: &str = "RAPPIE_SOL_BACKENDS_CONFIG";
 const DEFAULT_CONFIG_FILE: &str = "backends.toml";
+const DEFAULT_BACKENDS: [&str; 2] = ["sir-debug", "sir-release-csudl"];
 
 static CONFIGURED_BACKENDS: OnceLock<Result<OracleBackendSet, BackendConfigError>> =
     OnceLock::new();
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OracleBackendSpec {
+    Solidity(SolidityBackendSpec),
+    Plank(BackendSpec),
+}
+
+impl OracleBackendSpec {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Solidity(backend) => backend.name,
+            Self::Plank(backend) => backend.name,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OracleBackendSet {
-    pub reference: SolidityBackendSpec,
-    pub solidity_peers: Vec<SolidityBackendSpec>,
-    pub plank_backends: Vec<BackendSpec>,
+    pub backends: Vec<OracleBackendSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendConfigError {
     Read { path: PathBuf, message: String },
     Parse { path: Option<PathBuf>, message: String },
-    UnknownReference { name: String },
-    UnknownSolidityBackend { name: String },
-    UnknownPlankBackend { name: String },
-    EmptyBackendSet,
+    UnknownBackend { name: String },
+    TooFewBackends { enabled: usize },
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BackendConfigToml {
     #[serde(default)]
-    reference: Option<String>,
-    #[serde(default)]
-    solidity: BTreeMap<String, bool>,
-    #[serde(default)]
-    plank: BTreeMap<String, bool>,
+    backends: BTreeMap<String, bool>,
 }
 
 impl OracleBackendSet {
@@ -76,14 +84,11 @@ impl OracleBackendSet {
     }
 
     fn backend_count(&self) -> usize {
-        1 + self.solidity_peers.len() + self.plank_backends.len()
+        self.backends.len()
     }
 
     fn backend_names(&self) -> Vec<&'static str> {
-        std::iter::once(self.reference.name)
-            .chain(self.solidity_peers.iter().map(|backend| backend.name))
-            .chain(self.plank_backends.iter().map(|backend| backend.name))
-            .collect()
+        self.backends.iter().map(OracleBackendSpec::name).collect()
     }
 
     fn load_from_optional_path(
@@ -118,55 +123,30 @@ impl OracleBackendSet {
     }
 
     fn from_config(config: BackendConfigToml) -> Result<Self, BackendConfigError> {
-        for name in config.solidity.keys() {
-            if find_solidity_backend(name).is_none() {
-                return Err(BackendConfigError::UnknownSolidityBackend { name: name.clone() });
+        for name in config.backends.keys() {
+            if find_oracle_backend(name).is_none() {
+                return Err(BackendConfigError::UnknownBackend { name: name.clone() });
             }
         }
 
-        for name in config.plank.keys() {
-            if find_plank_backend(name).is_none() {
-                return Err(BackendConfigError::UnknownPlankBackend { name: name.clone() });
-            }
-        }
-
-        let reference = match config.reference.as_deref() {
-            Some(name) => find_solidity_backend(name)
-                .ok_or_else(|| BackendConfigError::UnknownReference { name: name.to_string() })?,
-            None => SOLIDITY_REFERENCE_BACKEND,
-        };
-
-        let solidity_peers = known_solidity_backends()
-            .filter(|backend| backend.name != reference.name)
-            .filter(|backend| {
-                config
-                    .solidity
-                    .get(backend.name)
-                    .copied()
-                    .unwrap_or_else(|| default_solidity_peer_enabled(*backend))
-            })
+        let backends = known_oracle_backends()
+            .filter(|backend| config.backends.get(backend.name()).copied().unwrap_or(false))
             .collect::<Vec<_>>();
 
-        let plank_backends = DEFAULT_PLANK_BACKENDS
-            .into_iter()
-            .filter(|backend| config.plank.get(backend.name).copied().unwrap_or(true))
-            .collect::<Vec<_>>();
+        validate_backend_count(backends.len())?;
 
-        if solidity_peers.is_empty() && plank_backends.is_empty() {
-            return Err(BackendConfigError::EmptyBackendSet);
-        }
-
-        Ok(Self { reference, solidity_peers, plank_backends })
+        Ok(Self { backends })
     }
 }
 
 impl Default for OracleBackendSet {
     fn default() -> Self {
-        Self {
-            reference: SOLIDITY_REFERENCE_BACKEND,
-            solidity_peers: DEFAULT_SOLIDITY_BACKENDS.to_vec(),
-            plank_backends: DEFAULT_PLANK_BACKENDS.to_vec(),
-        }
+        let backends = DEFAULT_BACKENDS
+            .into_iter()
+            .map(|name| find_oracle_backend(name).expect("default backend must be registered"))
+            .collect::<Vec<_>>();
+
+        Self { backends }
     }
 }
 
@@ -182,17 +162,11 @@ impl fmt::Display for BackendConfigError {
             Self::Parse { path: None, message } => {
                 write!(f, "could not parse backend config: {message}")
             }
-            Self::UnknownReference { name } => {
-                write!(f, "unknown Solidity reference backend in backend config: {name}")
+            Self::UnknownBackend { name } => {
+                write!(f, "unknown backend in backend config: {name}")
             }
-            Self::UnknownSolidityBackend { name } => {
-                write!(f, "unknown Solidity backend in backend config: {name}")
-            }
-            Self::UnknownPlankBackend { name } => {
-                write!(f, "unknown Plank backend in backend config: {name}")
-            }
-            Self::EmptyBackendSet => {
-                f.write_str("backend config must enable at least one candidate backend")
+            Self::TooFewBackends { enabled } => {
+                write!(f, "backend config must enable at least two backends, got {enabled}")
             }
         }
     }
@@ -208,35 +182,45 @@ fn configured_path() -> (PathBuf, bool) {
     (PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_CONFIG_FILE), false)
 }
 
+pub(crate) fn validate_backend_count(enabled: usize) -> Result<(), BackendConfigError> {
+    if enabled < 2 {
+        return Err(BackendConfigError::TooFewBackends { enabled });
+    }
+
+    Ok(())
+}
+
+pub(crate) fn known_oracle_backends() -> impl Iterator<Item = OracleBackendSpec> {
+    known_solidity_backends()
+        .map(OracleBackendSpec::Solidity)
+        .chain(DEFAULT_PLANK_BACKENDS.into_iter().map(OracleBackendSpec::Plank))
+}
+
 fn known_solidity_backends() -> impl Iterator<Item = SolidityBackendSpec> {
     std::iter::once(SOLIDITY_REFERENCE_BACKEND).chain(DEFAULT_SOLIDITY_BACKENDS)
 }
 
-fn find_solidity_backend(name: &str) -> Option<SolidityBackendSpec> {
-    known_solidity_backends().find(|backend| backend.name == name)
-}
-
-fn find_plank_backend(name: &str) -> Option<BackendSpec> {
-    DEFAULT_PLANK_BACKENDS.into_iter().find(|backend| backend.name == name)
-}
-
-fn default_solidity_peer_enabled(backend: SolidityBackendSpec) -> bool {
-    DEFAULT_SOLIDITY_BACKENDS.iter().any(|default_backend| default_backend.name == backend.name)
+fn find_oracle_backend(name: &str) -> Option<OracleBackendSpec> {
+    known_oracle_backends().find(|backend| backend.name() == name)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BackendConfigError, OracleBackendSet};
-    use crate::{DEFAULT_PLANK_BACKENDS, DEFAULT_SOLIDITY_BACKENDS, SOLIDITY_REFERENCE_BACKEND};
-    use std::{env, fmt::Write};
+    use super::{
+        BackendConfigError, OracleBackendSet, OracleBackendSpec, find_oracle_backend,
+        known_oracle_backends,
+    };
+    use std::env;
+
+    fn backend_names(backends: &OracleBackendSet) -> Vec<&'static str> {
+        backends.backends.iter().map(OracleBackendSpec::name).collect()
+    }
 
     #[test]
-    fn default_backend_set_matches_existing_registry() {
+    fn default_backend_set_uses_focused_sir_pair() {
         let backends = OracleBackendSet::default();
 
-        assert_eq!(backends.reference, SOLIDITY_REFERENCE_BACKEND);
-        assert_eq!(backends.solidity_peers, DEFAULT_SOLIDITY_BACKENDS);
-        assert_eq!(backends.plank_backends, DEFAULT_PLANK_BACKENDS);
+        assert_eq!(backend_names(&backends), vec!["sir-debug", "sir-release-csudl"]);
     }
 
     #[test]
@@ -251,6 +235,16 @@ mod tests {
     }
 
     #[test]
+    fn tracked_backend_config_uses_focused_sir_pair() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(super::DEFAULT_CONFIG_FILE);
+        let backends =
+            OracleBackendSet::load_from_path(path).expect("tracked backend config should parse");
+
+        assert_eq!(backend_names(&backends), vec!["sir-debug", "sir-release-csudl"]);
+    }
+
+    #[test]
     fn explicit_missing_config_is_an_error() {
         let path = env::temp_dir()
             .join(format!("rappie-sol-explicit-missing-backends-{}.toml", std::process::id()));
@@ -262,141 +256,160 @@ mod tests {
     }
 
     #[test]
-    fn config_can_disable_one_plank_backend() {
+    fn config_enables_backends_in_registry_order() {
         let backends = OracleBackendSet::from_toml_str(
             r#"
-[plank]
-sona-o2 = false
-"#,
-        )
-        .expect("config should parse");
-
-        assert_eq!(backends.plank_backends.len(), DEFAULT_PLANK_BACKENDS.len() - 1);
-        assert!(!backends.plank_backends.iter().any(|backend| backend.name == "sona-o2"));
-    }
-
-    #[test]
-    fn config_can_disable_one_solidity_peer() {
-        let backends = OracleBackendSet::from_toml_str(
-            r#"
-[solidity]
-solc-opt-via-ir = false
-"#,
-        )
-        .expect("config should parse");
-
-        assert_eq!(backends.solidity_peers.len(), DEFAULT_SOLIDITY_BACKENDS.len() - 1);
-        assert!(!backends.solidity_peers.iter().any(|backend| backend.name == "solc-opt-via-ir"));
-    }
-
-    #[test]
-    fn config_can_select_solidity_reference_backend() {
-        let backends = OracleBackendSet::from_toml_str(
-            r#"
-reference = "solc-noopt-via-ir"
-
-[solidity]
+[backends]
+sir-release-csudl = true
 solx-reference = true
-"#,
-        )
-        .expect("config should parse");
-
-        assert_eq!(backends.reference.name, "solc-noopt-via-ir");
-        assert!(backends.solidity_peers.iter().any(|backend| backend.name == "solx-reference"));
-        assert!(!backends.solidity_peers.iter().any(|backend| backend.name == "solc-noopt-via-ir"));
-    }
-
-    #[test]
-    fn unknown_solidity_backend_is_rejected() {
-        assert!(matches!(
-            OracleBackendSet::from_toml_str(
-                r#"
-[solidity]
-solc-but-faster = true
-"#
-            ),
-            Err(BackendConfigError::UnknownSolidityBackend { name })
-                if name == "solc-but-faster"
-        ));
-    }
-
-    #[test]
-    fn unknown_plank_backend_is_rejected() {
-        assert!(matches!(
-            OracleBackendSet::from_toml_str(
-                r#"
-[plank]
-sir-release-wow = true
-"#
-            ),
-            Err(BackendConfigError::UnknownPlankBackend { name })
-                if name == "sir-release-wow"
-        ));
-    }
-
-    #[test]
-    fn unknown_reference_backend_is_rejected() {
-        assert!(matches!(
-            OracleBackendSet::from_toml_str(r#"reference = "solc-mystery""#),
-            Err(BackendConfigError::UnknownReference { name }) if name == "solc-mystery"
-        ));
-    }
-
-    #[test]
-    fn empty_candidate_set_is_rejected() {
-        let mut config = String::from("[solidity]\n");
-        config.push_str("solc-noopt-legacy = false\n");
-        config.push_str("solc-noopt-via-ir = false\n");
-        config.push_str("solc-opt-legacy = false\n");
-        config.push_str("solc-opt-via-ir = false\n");
-        config.push_str("\n[plank]\n");
-        for backend in DEFAULT_PLANK_BACKENDS {
-            writeln!(config, "{} = false", backend.name).expect("string write should not fail");
-        }
-
-        assert!(matches!(
-            OracleBackendSet::from_toml_str(&config),
-            Err(BackendConfigError::EmptyBackendSet)
-        ));
-    }
-
-    #[test]
-    fn filtered_backends_keep_registry_order() {
-        let backends = OracleBackendSet::from_toml_str(
-            r#"
-[plank]
-sir-release = false
-sir-release-s = false
-"#,
-        )
-        .expect("config should parse");
-
-        let actual =
-            backends.plank_backends.iter().take(4).map(|backend| backend.name).collect::<Vec<_>>();
-
-        assert_eq!(actual, vec!["sir-debug", "sir-release-c", "sir-release-u", "sir-release-d"]);
-    }
-
-    #[test]
-    fn backend_names_csv_lists_reference_then_candidates() {
-        let backends = OracleBackendSet::from_toml_str(
-            r#"
-reference = "solc-noopt-via-ir"
-
-[solidity]
-solx-reference = true
-
-[plank]
 sir-debug = true
 "#,
         )
         .expect("config should parse");
 
-        assert!(
-            backends.backend_names_csv().starts_with(
-                "solc-noopt-via-ir, solx-reference, solc-noopt-legacy, solc-opt-legacy"
-            )
+        assert_eq!(
+            backend_names(&backends),
+            vec!["solx-reference", "sir-debug", "sir-release-csudl"]
         );
-        assert!(backends.backend_names_csv().contains(", sir-debug, sir-release"));
+    }
+
+    #[test]
+    fn config_can_enable_solidity_only_pair() {
+        let backends = OracleBackendSet::from_toml_str(
+            r#"
+[backends]
+solc-noopt-legacy = true
+solc-opt-legacy = true
+"#,
+        )
+        .expect("config should parse");
+
+        assert_eq!(backend_names(&backends), vec!["solc-noopt-legacy", "solc-opt-legacy"]);
+    }
+
+    #[test]
+    fn unknown_backend_is_rejected() {
+        assert!(matches!(
+            OracleBackendSet::from_toml_str(
+                r#"
+[backends]
+sir-release-wow = true
+"#
+            ),
+            Err(BackendConfigError::UnknownBackend { name })
+                if name == "sir-release-wow"
+        ));
+    }
+
+    #[test]
+    fn false_unknown_backend_is_rejected() {
+        assert!(matches!(
+            OracleBackendSet::from_toml_str(
+                r#"
+[backends]
+sir-debug = true
+sir-release-csudl = true
+sir-release-wow = false
+"#
+            ),
+            Err(BackendConfigError::UnknownBackend { name })
+                if name == "sir-release-wow"
+        ));
+    }
+
+    #[test]
+    fn missing_backend_table_is_rejected() {
+        assert!(matches!(
+            OracleBackendSet::from_toml_str(""),
+            Err(BackendConfigError::TooFewBackends { enabled: 0 })
+        ));
+    }
+
+    #[test]
+    fn empty_backend_table_is_rejected() {
+        assert!(matches!(
+            OracleBackendSet::from_toml_str("[backends]\n"),
+            Err(BackendConfigError::TooFewBackends { enabled: 0 })
+        ));
+    }
+
+    #[test]
+    fn one_enabled_backend_is_rejected() {
+        assert!(matches!(
+            OracleBackendSet::from_toml_str(
+                r#"
+[backends]
+sir-debug = true
+sir-release-csudl = false
+"#
+            ),
+            Err(BackendConfigError::TooFewBackends { enabled: 1 })
+        ));
+    }
+
+    #[test]
+    fn old_reference_field_is_rejected() {
+        assert!(matches!(
+            OracleBackendSet::from_toml_str(r#"reference = "solx-reference""#),
+            Err(BackendConfigError::Parse { .. })
+        ));
+    }
+
+    #[test]
+    fn old_solidity_table_is_rejected() {
+        assert!(matches!(
+            OracleBackendSet::from_toml_str(
+                r#"
+[solidity]
+solx-reference = true
+"#
+            ),
+            Err(BackendConfigError::Parse { .. })
+        ));
+    }
+
+    #[test]
+    fn old_plank_table_is_rejected() {
+        assert!(matches!(
+            OracleBackendSet::from_toml_str(
+                r#"
+[plank]
+sir-debug = true
+"#
+            ),
+            Err(BackendConfigError::Parse { .. })
+        ));
+    }
+
+    #[test]
+    fn backend_names_csv_lists_enabled_backends() {
+        let backends = OracleBackendSet::from_toml_str(
+            r#"
+[backends]
+sir-debug = true
+sir-release-csudl = true
+"#,
+        )
+        .expect("config should parse");
+
+        assert_eq!(backends.backend_names_csv(), "sir-debug, sir-release-csudl");
+    }
+
+    #[test]
+    fn known_oracle_backends_are_unique() {
+        let mut names = std::collections::BTreeSet::new();
+
+        for backend in known_oracle_backends() {
+            assert!(names.insert(backend.name()), "duplicate backend name {}", backend.name());
+        }
+    }
+
+    #[test]
+    fn default_backends_are_registered() {
+        assert!(matches!(find_oracle_backend("sir-debug"), Some(OracleBackendSpec::Plank(_))));
+        assert!(matches!(
+            find_oracle_backend("sir-release-csudl"),
+            Some(OracleBackendSpec::Plank(_))
+        ));
     }
 }

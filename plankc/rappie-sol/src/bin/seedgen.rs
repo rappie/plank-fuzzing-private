@@ -495,11 +495,7 @@ fn verified(case: &FuzzCase) -> bool {
         return false;
     };
 
-    executions
-        .solidity_peers
-        .iter()
-        .chain(&executions.plank_backends)
-        .all(|execution| execution.trace == executions.reference.trace)
+    executions.candidates.iter().all(|execution| execution.trace == executions.reference.trace)
 }
 
 fn buckets_for(classification: &SeedClassification) -> Vec<Bucket> {
