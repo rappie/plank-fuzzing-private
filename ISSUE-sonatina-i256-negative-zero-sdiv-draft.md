@@ -1,4 +1,4 @@
-# `I256` creates negative zero while folding `evm_sdiv`
+# Internal compiler crash when SCCP folds `evm_sdiv` to negative zero
 
 Sonatina panics during SCCP when `evm_sdiv` produces a zero quotient from
 operands with different signs. For example, `-1 / 5` should fold to canonical
@@ -7,8 +7,7 @@ zero, but it is represented internally as a negative zero.
 ## Reproducer
 
 Using [Plank](https://github.com/plankevm/plank-monorepo) at commit
-`1ddf8ab2e1edfdaa98c32306436a3ce7457a0809` with Sonatina at commit
-`55ca888f1fc83077e5eee803c0619231e9b50998`, save this as `repro.plk`:
+`1ddf8ab2e1edfdaa98c32306436a3ce7457a0809`, save this as `repro.plk`:
 
 ```plk
 init {
@@ -26,33 +25,19 @@ Then run:
 
 ```sh
 cd plankc
-RUST_BACKTRACE=1 cargo run -q -p plank -- \
+cargo run -q -p plank -- \
   build /path/to/repro.plk --backend sona -OO0
 ```
 
-Plank currently pins an older Sonatina revision, so its Sonatina dependencies
-were temporarily overridden with a clean checkout of the commit above. The
-build panics with:
+The build panics with:
 
 ```text
 thread 'main' panicked at primitive-types-0.14.0/src/lib.rs:43:1:
 arithmetic operation overflow
 ```
 
-The relevant stack is:
-
-```text
-sonatina_ir::bigint::I256::to_u256
-<sonatina_ir::bigint::I256 as core::hash::Hash>::hash
-sonatina_ir::dfg::DataFlowGraph::make_imm_value
-sonatina_codegen::optim::sccp::SccpSolver::fold
-```
-
-## Cause
+## Suspected Cause
 
 `I256::overflowing_div` computes an absolute quotient of zero, then calls
 `I256::make_negative(0)` because the operands have different signs. Hashing the
 result calls `I256::to_u256()`, which evaluates `!0 + 1` and overflows.
-
-I expected the division to fold to canonical zero and compile successfully.
-Canonicalizing zero in `I256::make_negative` appears to fix the issue.
